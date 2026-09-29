@@ -1,0 +1,2781 @@
+--[[
+    NEXUS / CUSTOM CLIENT PANEL                                      v7.4
+    Самостоятельный Lua/Luau-скрипт для клиентского исполнителя Roblox.
+    UI целиком написан на Instance / ScreenGui. Внешних библиотек нет.
+
+    ЗАПУСК: вставь весь файл в клиентский исполнитель и выполни.
+    Insert / RightShift — единственный способ показать/скрыть меню.
+    Включи Aimbot и удерживай ПКМ. Внешних кнопок N / AIM нет.
+    FOV — радиус области выбора цели в пикселях, не угол камеры.
+    Visuals работают, когда включён главный переключатель ESP.
+    Visuals → ESP тиммейтов: показывать союзников в ESP и Chams независимо от фильтров аима.
+    Misc → Unload полностью удаляет меню, эффекты и обработчики.
+    Freecam: WASD, Space вверх, Ctrl вниз, Shift ускорение, ПКМ для обзора.
+    Закрой меню, чтобы управлять Freecam или пользоваться Triggerbot.
+    Bhop автоматически прыгает при движении по земле.
+    При запуске: короткая заставка NEXUS, затем плавное появление меню.
+    Auto Aim наводится без ПКМ; Auto Shoot стреляет только после проверки цели.
+    Только Auto Shoot блокирует секцию Triggerbot; Auto Aim её не блокирует.
+    Misc → Watermark: FPS, название плейса, ping и число игроков.
+    World → NEXUS ATMOSPHERE: закат, ночь, утро, хоррор; плавный переход.
+    World → CUSTOM SKY: 6 ID текстур (пустые — встроенное небо), звёзды, солнце, луна.
+    World → PARTICLES: светлячки, искры, снег, орбита; аура и окружение отдельно.
+    World → Weather: дождь, снег, гроза и метель (локальные визуальные эффекты).
+    Misc → Noclip / Fly. Fly: WASD, Space вверх, Ctrl вниз, Shift ×2.
+    Configs: имя профиля латиницей, Save / Load / Delete / Reset.
+    Файлы конфигов: Nexus_<имя>.json в рабочей папке исполнителя.
+    Без readfile/writefile конфиги доступны только в памяти текущей сессии.
+    Legit: плавное наведение по ПКМ, FOV, мёртвая зона и Triggerbot.
+    Rage: Auto Aim без сглаживания, Auto Shoot, выбор/удержание цели и Hitbox Proxy.
+    При включённом Rage Auto Aim его наведение имеет приоритет над Legit Aimbot.
+    Auto Shoot отправляет клики; не меняет серверный урон, боезапас и темп оружия.
+    Misc → Карточка цели: ник, HP, дистанция и режим наведения.
+    End / Misc → Отключить функции: выключить активные эффекты и восстановить мир/персонажа.
+    Значения ползунков, цвета и сохранённые конфиги при этом не удаляются.
+    После заставки: окно «Наш Telegram», ссылка и копирование по нажатию кнопки.
+    Повторно открыть окно: Misc → Наш Telegram. Браузер автоматически не открывается.
+
+    ГРАНИЦЫ РЕАЛИЗАЦИИ:
+    • Цели: другие игроки со стандартным Character / Humanoid.
+    • Прицеливание поворачивает камеру; Prediction — линейное упреждение.
+    • Triggerbot и Auto Shoot требуют mouse1click и оружие с обычным управлением ЛКМ.
+    • Hitbox создаёт отдельный локальный Part внутри Character, без Weld/Motor6D.
+      Part закреплён сам по себе, не сталкивается и не соединён с телом.
+      Исходные Size/Anchored/CanCollide/Massless/скорости игрока НЕ меняются.
+      Только совместимое клиентское оружие может распознать proxy как попадание;
+      сервер вправе его отклонить. Это не универсальная подмена серверного хитрега.
+    • Chams: независимые визуальные копии с Neon/Glass/SmoothPlastic.
+      Через стены отображается цветной Highlight, а не настоящий Glass-шейдер.
+      У исходных деталей меняется только LocalTransparencyModifier, с возвратом.
+    • Bone ESP поддерживает стандартные имена частей R6 / R15.
+    • pcall ловит Lua-ошибки, но не нативные краши исполнителя и не обходит античит.
+    • Сервер/другие скрипты могут перезаписать WalkSpeed и JumpPower.
+    • Отсутствующие на клиенте (StreamingEnabled) персонажи пропускаются.
+    • Совместимость со всеми исполнителями и играми не гарантируется.
+    • Проверены синтаксис и логика на имитации API; в Roblox не запущен.
+
+    Используемые официальные API:
+    https://create.roblox.com/docs/reference/engine/classes/Camera
+    https://create.roblox.com/docs/reference/engine/classes/ScreenGui
+    https://create.roblox.com/docs/reference/engine/classes/Highlight
+    https://create.roblox.com/docs/reference/engine/classes/Humanoid
+    https://create.roblox.com/docs/reference/engine/classes/TeleportService
+]]
+
+local emergencyCleanup
+local bootOK, bootError = pcall(function()
+    -- Сервисы. Все события и циклы ниже имеют собственные границы pcall:
+    -- один внешний pcall не ловит ошибки будущих событий.
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local TweenService = game:GetService("TweenService")
+    local TeleportService = game:GetService("TeleportService")
+    local HttpService = game:GetService("HttpService")
+    local CoreGui = game:GetService("CoreGui")
+    local ContextActionService = game:GetService("ContextActionService")
+    local GuiService = game:GetService("GuiService")
+    local Lighting = game:GetService("Lighting")
+    local MarketplaceService = game:GetService("MarketplaceService")
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    local localPlayer = Players.LocalPlayer
+    assert(localPlayer, "Нужен клиентский контекст с Players.LocalPlayer")
+    local playerGui = localPlayer:WaitForChild("PlayerGui", 15)
+    assert(playerGui, "PlayerGui не появился за 15 секунд")
+
+    -- getgenv используется только для корректного повторного запуска.
+    -- syn, Drawing, loadstring и HTTP-загрузки не требуются.
+    local environment = _G
+    if type(getgenv) == "function" then
+        local ok, result = pcall(getgenv)
+        if ok and type(result) == "table" then environment = result end
+    end
+    local sessionKey = "__NEXUS_CUSTOM_PANEL_V1"
+    local previous = environment[sessionKey]
+    if type(previous) == "table" and type(previous.Destroy) == "function" then
+        pcall(previous.Destroy)
+    end
+
+    local alive = true
+    local connections, owned, records, warningTimes = {}, {}, {}, {}
+    local movementOriginals = setmetatable({}, { __mode = "k" })
+    local renderName = "Nexus_" .. HttpService:GenerateGUID(false)
+    local renderBound = false
+    local controller = {}
+    local activeTweens = setmetatable({}, { __mode = "k" })
+    local notify = function(message) print("[Nexus] " .. tostring(message)) end
+    local restoreMovement = function() end
+    local restoreHitboxes = function() end
+    local stopFreecam = function() end
+    local restoreChams = function() end
+    local restoreWorld = function() end
+    local stopWeather = function() end
+    local stopMotion = function() end
+    local stopEnvironment = function() end
+
+    -- Ошибки видны в консоли, но одинаковые сообщения не спамят каждый кадр.
+    local function protected(label, callback, ...)
+        local results = table.pack(pcall(callback, ...))
+        if not results[1] then
+            local now = os.clock()
+            if not warningTimes[label] or now - warningTimes[label] > 8 then
+                warningTimes[label] = now
+                warn("[Nexus / " .. label .. "] " .. tostring(results[2]))
+            end
+        end
+        return table.unpack(results, 1, results.n)
+    end
+
+    local function connect(signal, label, callback)
+        local connection = signal:Connect(function(...)
+            if alive then protected(label, callback, ...) end
+        end)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    -- Регистрация корневых объектов обеспечивает очистку даже при сбое сборки UI.
+    local function own(instance)
+        table.insert(owned, instance)
+        return instance
+    end
+
+    local function destroy()
+        if not alive then return end
+        alive = false
+        if renderBound then
+            pcall(function() RunService:UnbindFromRenderStep(renderName) end)
+            pcall(function() RunService:UnbindFromRenderStep(renderName .. "_ESP") end)
+        end
+        for _, connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
+        for _, tween in pairs(activeTweens) do pcall(function() tween:Cancel() end) end
+        pcall(restoreMovement)
+        pcall(restoreHitboxes)
+        pcall(stopFreecam)
+        pcall(restoreChams)
+        pcall(stopEnvironment)
+        pcall(restoreWorld)
+        pcall(stopWeather)
+        pcall(stopMotion)
+        for _, instance in ipairs(owned) do pcall(function() instance:Destroy() end) end
+        if environment[sessionKey] == controller then environment[sessionKey] = nil end
+        table.clear(connections)
+        table.clear(records)
+    end
+    emergencyCleanup = destroy
+    controller.Destroy = destroy
+
+    local Settings = {
+        Aim = false, FOV = 90, TargetPart = "Head", Smoothness = 8,
+        ShowFOV = true, TeamCheck = true, VisibleCheck = true,
+        ESP = false, ESPTeammates = false, Boxes = true, Tracers = false, Bones = false,
+        Names = true, Health = true, MaxDistance = 2500,
+        SpeedEnabled = false, WalkSpeed = 16,
+        JumpEnabled = false, JumpPower = 50, Scale = 100,
+        Prediction = false, PredictionMs = 100,
+        Trigger = false, TriggerDelay = 140, Hitbox = false, HitboxSize = 5,
+        Distance = true, Arrows = true, ESPSmoothing = 28,
+        Freecam = false, FreecamSpeed = 48, Bhop = false,
+        Crosshair = false, CrosshairSize = 7, CrosshairGap = 4, CrosshairThickness = 2,
+        BoxColor = Color3.fromRGB(210, 203, 220),
+        BoneColor = Color3.fromRGB(210, 207, 202), TextColor = Color3.fromRGB(235, 232, 225),
+        HealthColor = Color3.fromRGB(190, 172, 181),
+        Chams = false, ChamsMaterial = "Neon", ChamsOpacity = 65,
+        ChamsColor = Color3.fromRGB(193, 181, 209), ChamsOutline = false,
+        HitboxVisible = false,
+        WorldEnabled = false, WorldTime = math.clamp(math.floor(Lighting.ClockTime * 60), 0, 1439),
+        WorldBrightness = math.clamp(math.floor(Lighting.Brightness * 10 + 0.5), 0, 100),
+        WorldAmbient = Lighting.Ambient, WorldOutdoorAmbient = Lighting.OutdoorAmbient,
+        WorldFogEnd = math.clamp(Lighting.FogEnd, 100, 100000), WorldFogColor = Lighting.FogColor,
+        WorldShadows = Lighting.GlobalShadows, WorldClearAtmosphere = false, WorldKeep = false,
+        AutoAim = false, AutoShot = false, AutoShotDelay = 50,
+        RageFOV = 400, RageShowFOV = true, RageTargetPart = "Head",
+        RageVisibleCheck = true, RageTeamCheck = true, RageHoldTarget = true,
+        RagePriority = "Crosshair", RagePrediction = false, RagePredictionMs = 60,
+        RageImmediateShot = true, LegitDeadzone = 2,
+        Watermark = true, Weather = false, WeatherMode = "Rain", WeatherIntensity = 60,
+        WeatherWind = 8, WeatherRoofCheck = true, WeatherLightning = true,
+        Noclip = false, Fly = false, FlySpeed = 50, TargetCard = true,
+        AtmosphereEnabled = false, AtmospherePreset = "Sunset", AtmosphereStrength = 75,
+        CustomSky = false, SkyStars = 2500, SkySun = 12, SkyMoon = 15,
+        SkyBk = "", SkyDn = "", SkyFt = "", SkyLf = "", SkyRt = "", SkyUp = "",
+        AmbientParticles = false, CharacterParticles = false, ParticleMode = "Fireflies",
+        ParticleDensity = 35, ParticleRadius = 6, ParticleSize = 30, ParticleSpeed = 50,
+        ParticleColor = Color3.fromRGB(211, 192, 246), ParticleFirstPerson = false,
+    }
+    local introActive = true
+    local extras = { Defaults = {}, Ranges = {}, Refresh = {} }
+    for key, value in pairs(Settings) do extras.Defaults[key] = value end
+    local Theme = {
+        Background = Color3.fromRGB(10, 12, 16), Sidebar = Color3.fromRGB(13, 16, 21),
+        Card = Color3.fromRGB(15, 18, 24), Hover = Color3.fromRGB(25, 29, 38),
+        Line = Color3.fromRGB(29, 34, 44), Text = Color3.fromRGB(229, 230, 235),
+        Muted = Color3.fromRGB(133, 141, 154), Accent = Color3.fromRGB(166, 158, 194),
+        Green = Color3.fromRGB(166, 158, 194), DarkAccent = Color3.fromRGB(35, 32, 47),
+        Red = Color3.fromRGB(209, 126, 137),
+    }
+
+    local function create(className, properties, parent)
+        local object = Instance.new(className)
+        for property, value in pairs(properties or {}) do object[property] = value end
+        object.Parent = parent
+        return object
+    end
+    local function corner(object, radius)
+        create("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, object)
+    end
+    local function stroke(object, color, thickness)
+        return create("UIStroke", {
+            Color = color or Theme.Line, Thickness = thickness or 1,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        }, object)
+    end
+    local function text(parent, value, position, size, fontSize, color, bold)
+        return create("TextLabel", {
+            BackgroundTransparency = 1, BorderSizePixel = 0,
+            Text = value, Position = position, Size = size,
+            Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham,
+            TextSize = fontSize or 13, TextColor3 = color or Theme.Text,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+        }, parent)
+    end
+    local function tween(object, properties, duration)
+        if activeTweens[object] then activeTweens[object]:Cancel() end
+        local animation = TweenService:Create(object,
+            TweenInfo.new(duration or 0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), properties)
+        activeTweens[object] = animation
+        animation:Play()
+        return animation
+    end
+    local function button(parent, label, position, size, background)
+        local object = create("TextButton", {
+            Position = position, Size = size, Text = label, BorderSizePixel = 0,
+            AutoButtonColor = false, BackgroundColor3 = background or Theme.Card,
+            TextColor3 = Theme.Text, TextSize = 13, Font = Enum.Font.GothamMedium,
+        }, parent)
+        corner(object, 10)
+        return object
+    end
+
+    local root = own(create("ScreenGui", {
+        Name = "NexusCustomUI", IgnoreGuiInset = true, ResetOnSpawn = false,
+        DisplayOrder = 10000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    }))
+    -- WorldToViewportPoint и экранные координаты UI используют одну систему.
+    root.ScreenInsets = Enum.ScreenInsets.None
+    root.ClipToDeviceSafeArea = false
+
+    local possibleParents = {}
+    if type(gethui) == "function" then
+        local ok, parent = pcall(gethui)
+        if ok and typeof(parent) == "Instance" then table.insert(possibleParents, parent) end
+    end
+    table.insert(possibleParents, CoreGui)
+    table.insert(possibleParents, playerGui)
+    for _, parent in ipairs(possibleParents) do
+        local ok = pcall(function() root.Parent = parent end)
+        if ok and root.Parent == parent then break end
+    end
+    assert(root.Parent, "Исполнитель не разрешил размещение ScreenGui")
+    connect(root.Destroying, "external-destroy", destroy)
+
+    local worldFolder = own(create("Folder", { Name = renderName .. "_Highlights" }, workspace))
+    local overlay = create("Frame", {
+        Name = "Overlay", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        BorderSizePixel = 0, Active = false, ZIndex = 1,
+    }, root)
+    local fovCircle = create("Frame", {
+        Name = "FOV", AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(260, 260), Visible = false,
+    }, overlay)
+    create("UICorner", { CornerRadius = UDim.new(1, 0) }, fovCircle)
+    local fovStroke = stroke(fovCircle, Theme.Accent, 1)
+    fovStroke.Transparency = 0.35
+    local displayedFOV = Settings.FOV
+
+    -- Геометрия по референсу: постоянная боковая колонка и две колонки секций.
+    -- UIScale применяется только к окну, не к ESP/FOV.
+    local panel = create("CanvasGroup", {
+        Name = "Window", BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
+        Size = UDim2.fromOffset(840, 620), Position = UDim2.fromOffset(80, 70),
+        ZIndex = 20, GroupTransparency = 1, Visible = false, Active = true,
+    }, root)
+    corner(panel, 8)
+    stroke(panel)
+    local uiScale = create("UIScale", { Scale = 1 }, panel)
+    local sidebar = create("Frame", { Name = "Sidebar", Size = UDim2.new(0, 160, 1, 0),
+        BackgroundColor3 = Theme.Sidebar, BorderSizePixel = 0 }, panel)
+    create("Frame", { Position = UDim2.new(1, -1, 0, 0), Size = UDim2.new(0, 1, 1, 0),
+        BackgroundColor3 = Theme.Line, BorderSizePixel = 0 }, sidebar)
+    text(sidebar, "NEXUS", UDim2.fromOffset(18, 16), UDim2.fromOffset(120, 28), 24, Theme.Text, true)
+    text(sidebar, "CLIENT  /  07", UDim2.fromOffset(19, 44), UDim2.fromOffset(120, 15), 9, Theme.Muted)
+    text(sidebar, "WORKSPACE", UDim2.fromOffset(18, 90), UDim2.fromOffset(126, 18), 9, Theme.Muted)
+    local header = create("Frame", { Name = "DragHeader", Position = UDim2.fromOffset(160, 0),
+        Size = UDim2.new(1, -160, 0, 60), BackgroundTransparency = 1, Active = true }, panel)
+    local breadcrumb = text(header, "Overview  /  Legit", UDim2.fromOffset(20, 20), UDim2.new(1, -250, 0, 20), 12, Theme.Muted)
+    create("Frame", { Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = Theme.Line, BorderSizePixel = 0 }, header)
+    local pageHost = create("Frame", { Name = "PageHost", Position = UDim2.fromOffset(180, 76),
+        Size = UDim2.new(1, -200, 1, -96), BackgroundTransparency = 1, ClipsDescendants = true }, panel)
+
+    local toast = create("CanvasGroup", {
+        AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -28),
+        Size = UDim2.new(0.85, 0, 0, 62), BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0, Visible = false, ZIndex = 40, GroupTransparency = 1,
+    }, root)
+    corner(toast, 20)
+    create("UISizeConstraint", { MaxSize = Vector2.new(520, 62) }, toast)
+    local toastText = text(toast, "", UDim2.fromOffset(16, 6), UDim2.new(1, -32, 1, -12), 13)
+    toastText.TextWrapped = true
+    toastText.TextTruncate = Enum.TextTruncate.None
+    local toastGeneration = 0
+    notify = function(message)
+        if not alive then return end
+        toastGeneration = toastGeneration + 1
+        local generation = toastGeneration
+        toastText.Text = tostring(message)
+        toast.Visible = true
+        tween(toast, { GroupTransparency = 0 })
+        task.delay(3.5, function()
+            if alive and generation == toastGeneration then
+                protected("toast-hide", function() tween(toast, { GroupTransparency = 1 }) end)
+            end
+        end)
+    end
+
+    -- Встроенные SVG: окружности — цельные UIStroke, без коротких сегментов.
+    -- Толщина и перекрытие остальных штрихов учитывают реальный UIScale окна.
+    -- Внешние картинки, HTTP, asset-id и функции файлов исполнителя не нужны.
+    local drawSvgIcon
+    do
+        local layouts = {}
+        extras.UpdateIconScale = function(scale)
+            for _, layout in ipairs(layouts) do layout(scale) end
+        end
+        local icons = {
+            Rage = [[<svg viewBox="0 0 24 24"><polyline points="14,2 5,14 11,14 10,22 20,9 13,9 14,2"/></svg>]],
+            Configs = [[<svg viewBox="0 0 24 24"><polyline points="4,3 17,3 21,7 21,21 3,21 3,3 4,3"/><polyline points="7,3 7,9 16,9 16,3"/><polyline points="7,21 7,14 17,14 17,21"/></svg>]],
+            Legit = [[<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="1" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="1" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="23" y2="12"/></svg>]],
+            Visuals = [[<svg viewBox="0 0 24 24"><polyline points="2,12 4,9 7,7 12,6 17,7 20,9 22,12 20,15 17,17 12,18 7,17 4,15 2,12"/><circle cx="12" cy="12" r="3"/></svg>]],
+            World = [[<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="5" y1="7" x2="19" y2="7"/><line x1="5" y1="17" x2="19" y2="17"/></svg>]],
+            Misc = [[<svg viewBox="0 0 24 24"><line x1="5" y1="3" x2="5" y2="6"/><line x1="5" y1="10" x2="5" y2="21"/><circle cx="5" cy="8" r="2"/><line x1="12" y1="3" x2="12" y2="14"/><line x1="12" y1="18" x2="12" y2="21"/><circle cx="12" cy="16" r="2"/><line x1="19" y1="3" x2="19" y2="7"/><line x1="19" y1="11" x2="19" y2="21"/><circle cx="19" cy="9" r="2"/></svg>]],
+        }
+        drawSvgIcon = function(parent, name)
+            local container = create("Frame", { Name = name .. "SvgIcon", Position = UDim2.fromOffset(9, 6),
+                Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 }, parent)
+            local strokes, segments, rings, scale = {}, {}, {}, 20 / 24
+            local function line(x1, y1, x2, y2)
+                local dx, dy = (x2 - x1) * scale, (y2 - y1) * scale
+                local length = math.sqrt(dx * dx + dy * dy)
+                local segment = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0,
+                    Position = UDim2.fromOffset((x1 + x2) * scale / 2, (y1 + y2) * scale / 2),
+                    Size = UDim2.fromOffset(length + 0.85, 1.5),
+                    Rotation = math.deg(math.atan2(dy, dx)), BackgroundColor3 = Theme.Muted }, container)
+                -- Короткий штрих не превращается в отдельную капсулу UICorner.
+                table.insert(segments, { object = segment, length = length })
+                table.insert(strokes, { object = segment, property = "BackgroundColor3" })
+            end
+            local function circle(cx, cy, radius)
+                local ring = create("Frame", { Name = "Circle", AnchorPoint = Vector2.new(0.5, 0.5),
+                    Position = UDim2.fromOffset(cx * scale, cy * scale),
+                    Size = UDim2.fromOffset(radius * scale * 2, radius * scale * 2),
+                    BackgroundTransparency = 1, BorderSizePixel = 0 }, container)
+                create("UICorner", { CornerRadius = UDim.new(0.5, 0) }, ring)
+                local outline = stroke(ring, Theme.Muted, 1.5)
+                table.insert(rings, outline)
+                table.insert(strokes, { object = outline, property = "Color" })
+            end
+            for tag, raw in (icons[name] or icons.Legit):gmatch("<(%w+)([^<>]-)/>") do
+                local attr = {}
+                for key, value in raw:gmatch('([%w%-]+)="([^"]+)"') do attr[key] = tonumber(value) or value end
+                if tag == "line" then line(attr.x1, attr.y1, attr.x2, attr.y2)
+                elseif tag == "circle" then circle(attr.cx, attr.cy, attr.r)
+                elseif tag == "ellipse" then
+                    local rx, ry = attr.rx, attr.ry
+                    for i = 0, 31 do
+                        local a, b = i * math.pi / 16, (i + 1) * math.pi / 16
+                        line(attr.cx + math.cos(a) * rx, attr.cy + math.sin(a) * ry,
+                            attr.cx + math.cos(b) * rx, attr.cy + math.sin(b) * ry)
+                    end
+                elseif tag == "polyline" then
+                    local numbers = {}
+                    for value in attr.points:gmatch("[%-%d%.]+") do table.insert(numbers, tonumber(value)) end
+                    for i = 1, #numbers - 3, 2 do line(numbers[i], numbers[i + 1], numbers[i + 2], numbers[i + 3]) end
+                end
+            end
+            local function layout(effectiveScale)
+                effectiveScale = math.max(0.1, effectiveScale)
+                -- Значения ниже переводятся из экранных пикселей в локальные.
+                -- При 70% штрих остаётся не тоньше 1.25 px, стыки перекрываются.
+                local thickness = math.max(1.25, 1.5 * effectiveScale) / effectiveScale
+                local overlap = math.max(0.85, 0.85 * effectiveScale) / effectiveScale
+                for _, entry in ipairs(segments) do
+                    entry.object.Size = UDim2.fromOffset(entry.length + overlap, thickness)
+                end
+                for _, outline in ipairs(rings) do outline.Thickness = thickness end
+            end
+            table.insert(layouts, layout)
+            layout(uiScale.Scale)
+            return function(color)
+                for _, entry in ipairs(strokes) do entry.object[entry.property] = color end
+            end
+        end
+    end
+
+    -- Секции расположены UIListLayout; ручных Y-смещений между рядами нет.
+    local pages, tabButtons, tabIconColors = {}, {}, {}
+    local pageOrder, selectedPage = 0, nil
+    local function makePage(name, number, subtitle)
+        local group = create("CanvasGroup", { Name = name, Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1, Visible = false, GroupTransparency = 1 }, pageHost)
+        local columns = {}
+        for index, key in ipairs({ "left", "right" }) do
+            local scroller = create("ScrollingFrame", {
+                Name = key, Position = UDim2.new((index - 1) * 0.5, (index - 1) * 6, 0, 0),
+                Size = UDim2.new(0.5, -6, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+                ScrollBarThickness = 2, ScrollBarImageColor3 = Theme.Muted,
+                CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                ScrollingDirection = Enum.ScrollingDirection.Y,
+            }, group)
+            create("UIPadding", { PaddingRight = UDim.new(0, 5), PaddingBottom = UDim.new(0, 12) }, scroller)
+            create("UIListLayout", { Padding = UDim.new(0, 14), SortOrder = Enum.SortOrder.LayoutOrder }, scroller)
+            columns[key] = scroller
+        end
+        local tab = button(sidebar, "", UDim2.fromOffset(10, 116 + pageOrder * 39),
+            UDim2.fromOffset(140, 32), Theme.Sidebar)
+        corner(tab, 4)
+        tab.TextSize, tab.TextColor3, tab.TextXAlignment = 12, Theme.Muted, Enum.TextXAlignment.Left
+        local title = text(tab, name, UDim2.fromOffset(36, 0), UDim2.new(1, -41, 1, 0), 12, Theme.Muted)
+        title.Name = "TabTitle"
+        tabIconColors[name] = drawSvgIcon(tab, name)
+        pageOrder = pageOrder + 1
+        pages[name], tabButtons[name] = group, tab
+        connect(tab.Activated, "tab-" .. name, function()
+            if selectedPage == name then return end
+            selectedPage = name
+            breadcrumb.Text = "Overview  /  " .. name
+            for pageName, page in pairs(pages) do
+                page.Visible = pageName == name
+                if page.Visible then page.GroupTransparency = 1; tween(page, { GroupTransparency = 0 }, 0.16) end
+                tween(tabButtons[pageName], {
+                    BackgroundColor3 = pageName == name and Theme.Hover or Theme.Sidebar,
+                    TextColor3 = pageName == name and Theme.Text or Theme.Muted,
+                })
+                tabIconColors[pageName](pageName == name and Theme.Accent or Theme.Muted)
+                tabButtons[pageName]:FindFirstChild("TabTitle").TextColor3 = pageName == name and Theme.Text or Theme.Muted
+            end
+        end)
+        return columns
+    end
+    local main = makePage("Legit", "01")
+    local rage = makePage("Rage", "02")
+    local visuals = makePage("Visuals", "02")
+    local world = makePage("World", "03")
+    local misc = makePage("Misc", "04")
+    local configs = makePage("Configs", "05")
+    selectedPage = "Legit"
+    pages.Legit.Visible, pages.Legit.GroupTransparency = true, 0
+    tabButtons.Legit.TextColor3, tabButtons.Legit.BackgroundColor3 = Theme.Text, Theme.Hover
+    tabIconColors.Legit(Theme.Accent)
+    tabButtons.Legit:FindFirstChild("TabTitle").TextColor3 = Theme.Text
+    local sectionOrder = 0
+    local function section(column, title, canDim)
+        sectionOrder = sectionOrder + 1
+        local holder = create("Frame", { Name = title, Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = sectionOrder }, column)
+        create("UIListLayout", { Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder }, holder)
+        local caption = text(holder, title, UDim2.new(), UDim2.new(1, 0, 0, 18), 10, Theme.Muted)
+        caption.LayoutOrder = 0
+        local content = create(canDim and "CanvasGroup" or "Frame", { Name = "Rows", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = Theme.Card, BorderSizePixel = 0, LayoutOrder = 1 }, holder)
+        corner(content, 5)
+        stroke(content)
+        create("UIListLayout", { Padding = UDim.new(0, 1), SortOrder = Enum.SortOrder.LayoutOrder }, content)
+        return content
+    end
+
+    local rowOrder = 0
+    local function row(parent, title, description, height, reserve)
+        rowOrder = rowOrder + 1
+        local frame = create("Frame", { Size = UDim2.new(1, 0, 0, height or 66),
+            BackgroundColor3 = Theme.Card, BorderSizePixel = 0, LayoutOrder = rowOrder }, parent)
+        corner(frame, 3)
+        text(frame, title, UDim2.fromOffset(12, 10), UDim2.new(1, -(reserve or 68), 0, 20), 12, Theme.Text)
+        if description then
+            text(frame, description, UDim2.fromOffset(12, 34), UDim2.new(1, -24, 0, 17), 9, Theme.Muted)
+        end
+        return frame
+    end
+    local toggleRefreshers = {}
+    local featureLocks = {}
+    local function toggle(parent, title, description, key, callback)
+        local frame = row(parent, title, description)
+        local track = button(frame, "", UDim2.new(1, -45, 0, 12), UDim2.fromOffset(32, 18), Theme.Line)
+        corner(track, 9)
+        local knob = create("Frame", { Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(2, 2),
+            BackgroundColor3 = Theme.Text, BorderSizePixel = 0 }, track)
+        corner(knob, 7)
+        local function refresh(animate)
+            local targetPosition = UDim2.fromOffset(Settings[key] and 16 or 2, 2)
+            local targetColor = Settings[key] and Theme.Green or Theme.Line
+            if animate then
+                tween(track, { BackgroundColor3 = targetColor })
+                tween(knob, { Position = targetPosition })
+            else
+                track.BackgroundColor3, knob.Position = targetColor, targetPosition
+            end
+        end
+        toggleRefreshers[key] = refresh
+        refresh(false)
+        connect(track.Activated, "toggle-" .. key, function()
+            if featureLocks[key] then return end
+            Settings[key] = not Settings[key]
+            refresh(true)
+            if callback then callback(Settings[key]) end
+        end)
+    end
+
+    -- Один общий обработчик движения вместо новых подключений на каждое нажатие.
+    local activeSlider, dragWindow
+    local function slider(parent, title, key, minimum, maximum, step, unit, callback, formatValue)
+        extras.Ranges[key] = { minimum, maximum, step }
+        local frame = row(parent, title, nil, 72, 120)
+        local valueLabel = text(frame, "", UDim2.new(1, -106, 0, 10), UDim2.fromOffset(92, 20), 12, Theme.Accent)
+        valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+        local hit = button(frame, "", UDim2.new(0, 14, 0, 39), UDim2.new(1, -28, 0, 24))
+        hit.BackgroundTransparency = 1
+        local track = create("Frame", { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4),
+            BackgroundColor3 = Theme.Line, BorderSizePixel = 0 }, hit)
+        corner(track, 2)
+        local fill = create("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0 }, track)
+        corner(fill, 2)
+        local handle = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(12, 12),
+            BackgroundColor3 = Theme.Text, BorderSizePixel = 0 }, track)
+        corner(handle, 6)
+        local function refresh()
+            local fraction = (Settings[key] - minimum) / (maximum - minimum)
+            fill.Size = UDim2.fromScale(fraction, 1)
+            handle.Position = UDim2.fromScale(fraction, 0.5)
+            valueLabel.Text = formatValue and formatValue(Settings[key]) or (tostring(Settings[key]) .. (unit or ""))
+        end
+        local function update(x)
+            if featureLocks[key] then return end
+            local fraction = math.clamp((x - hit.AbsolutePosition.X) / math.max(hit.AbsoluteSize.X, 1), 0, 1)
+            local value = math.clamp(minimum + math.floor(fraction * (maximum - minimum) / step + 0.5) * step, minimum, maximum)
+            if value ~= Settings[key] then
+                Settings[key] = value
+                refresh()
+                if callback then callback(value) end
+            end
+        end
+        refresh()
+        extras.Refresh[key] = refresh
+        connect(hit.InputBegan, "slider-" .. key, function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                activeSlider = { input = input, update = update }
+                update(input.Position.X)
+            end
+        end)
+    end
+    local function action(parent, title, description, label, callback, danger)
+        local frame = row(parent, title, description, 70, 150)
+        local item = button(frame, label, UDim2.new(1, -129, 0, 10), UDim2.fromOffset(115, 25), Theme.Hover)
+        item.TextSize = 11
+        item.TextColor3 = danger and Theme.Red or Theme.Accent
+        connect(item.Activated, "action-" .. title, callback)
+        return item
+    end
+
+    -- Палитра + точный HEX-ввод. Все цвета доступны без сторонних библиотек.
+    local palette = { "E7E5E1", "BBB6C9", "C2B3AB", "ADB8C7", "B5BCAE", "C4A8AD", "999999", "DFBF96" }
+    local function parseHex(value)
+        local hex = tostring(value):gsub("%s", ""):gsub("^#", "")
+        if #hex ~= 6 or not hex:match("^%x+$") then return nil end
+        return Color3.fromRGB(tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16))
+    end
+    local function toHex(color)
+        return string.format("#%02X%02X%02X", math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5))
+    end
+    local function colorPicker(parent, title, key, callback)
+        local frame = row(parent, title, nil, 88, 144)
+        local preview = create("Frame", { Name = "ColorPreview", Position = UDim2.new(1, -130, 0, 10),
+            Size = UDim2.fromOffset(21, 21), BackgroundColor3 = Settings[key], BorderSizePixel = 0 }, frame)
+        corner(preview, 4)
+        local input = create("TextBox", { Name = key .. "Hex", Position = UDim2.new(1, -102, 0, 8),
+            Size = UDim2.fromOffset(89, 25), BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
+            TextColor3 = Theme.Text, Font = Enum.Font.Code, TextSize = 12, Text = toHex(Settings[key]),
+            ClearTextOnFocus = false, PlaceholderText = "#RRGGBB" }, frame)
+        corner(input, 4)
+        extras.Refresh[key] = function()
+            preview.BackgroundColor3, input.Text = Settings[key], toHex(Settings[key])
+        end
+        local presets = create("Frame", { Position = UDim2.fromOffset(13, 48), Size = UDim2.new(1, -26, 0, 23),
+            BackgroundTransparency = 1 }, frame)
+        create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 7),
+            SortOrder = Enum.SortOrder.LayoutOrder }, presets)
+        local function assign(color)
+            Settings[key] = color
+            preview.BackgroundColor3, input.Text = color, toHex(color)
+            if callback then callback() end
+        end
+        for index, hex in ipairs(palette) do
+            local color = parseHex(hex)
+            local swatch = button(presets, "", UDim2.new(), UDim2.fromOffset(23, 23), color)
+            swatch.LayoutOrder = index
+            corner(swatch, 4)
+            connect(swatch.Activated, "palette-" .. key, function() assign(color) end)
+        end
+        connect(input.FocusLost, "hex-" .. key, function()
+            local color = parseHex(input.Text)
+            if color then assign(color) else
+                input.Text = toHex(Settings[key])
+                notify("Цвет: введи шесть HEX-цифр, например #C2BACF.")
+            end
+        end)
+    end
+
+    -- Исходные свойства сохраняются отдельно для каждого нового Humanoid.
+    -- Восстанавливаем только то значение, которое всё ещё принадлежит нам:
+    -- стороннее изменение сервером/игрой при выключении не затирается.
+    local function restoreOne(humanoid, saved, speed, jump)
+        if not humanoid.Parent then return end
+        if speed and saved.lastSpeed ~= nil then
+            if humanoid.WalkSpeed == saved.lastSpeed then humanoid.WalkSpeed = saved.speed end
+            saved.lastSpeed = nil
+        end
+        if jump and saved.lastJump ~= nil then
+            local ownsPower = humanoid.JumpPower == saved.lastJump
+            if ownsPower then humanoid.JumpPower = saved.jump end
+            if ownsPower and humanoid.UseJumpPower then humanoid.UseJumpPower = saved.usePower end
+            saved.lastJump = nil
+        end
+    end
+    restoreMovement = function()
+        for humanoid, saved in pairs(movementOriginals) do
+            protected("restore-movement", restoreOne, humanoid, saved, true, true)
+        end
+    end
+    local function applyMovement()
+        local character = localPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return end
+        local saved = movementOriginals[humanoid]
+        if not saved then
+            saved = {}
+            movementOriginals[humanoid] = saved
+        end
+        if Settings.SpeedEnabled then
+            if saved.lastSpeed == nil then saved.speed = humanoid.WalkSpeed end
+            saved.lastSpeed = Settings.WalkSpeed
+            humanoid.WalkSpeed = Settings.WalkSpeed
+        else
+            restoreOne(humanoid, saved, true, false)
+        end
+        if Settings.JumpEnabled then
+            if saved.lastJump == nil then
+                saved.jump, saved.usePower = humanoid.JumpPower, humanoid.UseJumpPower
+            end
+            saved.lastJump = Settings.JumpPower
+            humanoid.UseJumpPower = true
+            humanoid.JumpPower = Settings.JumpPower
+        else
+            restoreOne(humanoid, saved, false, true)
+        end
+    end
+    local pendingCharacter
+    connect(localPlayer.CharacterAdded, "local-respawn", function(character) pendingCharacter = character end)
+    local setFreecam, updateHitboxes, updateChams
+    local clickMouse = type(mouse1click) == "function" and mouse1click or nil
+
+    -- Lighting и Atmosphere восстанавливаются отдельно от UI/персонажа.
+    -- Без WorldKeep значения задаются только по действию пользователя.
+    local worldOriginals = {}
+    local function worldWrite(object, property, value)
+        local saved = worldOriginals[object]
+        if not saved then saved = { original = {}, last = {} }; worldOriginals[object] = saved end
+        if saved.original[property] == nil then saved.original[property] = object[property] end
+        saved.last[property] = value
+        if object[property] ~= value then object[property] = value end
+    end
+    local function restoreWorldObject(object)
+        local saved = worldOriginals[object]
+        if not saved then return end
+        if object == Lighting or object.Parent then
+            for property, value in pairs(saved.original) do
+                protected("world-restore-" .. property, function()
+                    if object[property] == saved.last[property] then object[property] = value end
+                end)
+            end
+        end
+        worldOriginals[object] = nil
+    end
+    restoreWorld = function()
+        for object in pairs(worldOriginals) do protected("world-restore", restoreWorldObject, object) end
+    end
+    local function applyWorld()
+        if Settings.WorldEnabled and Settings.AtmosphereEnabled then
+            Settings.AtmosphereEnabled = false
+            if extras.StopAtmosphere then extras.StopAtmosphere() end
+            if toggleRefreshers.AtmosphereEnabled then toggleRefreshers.AtmosphereEnabled(true) end
+        elseif Settings.AtmosphereEnabled then return end
+        if not Settings.WorldEnabled then restoreWorld(); return end
+        local minutes = math.clamp(Settings.WorldTime, 0, 1439)
+        local time = string.format("%02d:%02d:00", math.floor(minutes / 60), minutes % 60)
+        worldWrite(Lighting, "TimeOfDay", time)
+        worldWrite(Lighting, "Brightness", Settings.WorldBrightness / 10)
+        worldWrite(Lighting, "Ambient", Settings.WorldAmbient)
+        worldWrite(Lighting, "OutdoorAmbient", Settings.WorldOutdoorAmbient)
+        worldWrite(Lighting, "GlobalShadows", Settings.WorldShadows)
+        worldWrite(Lighting, "FogStart", 0)
+        worldWrite(Lighting, "FogEnd", Settings.WorldFogEnd)
+        worldWrite(Lighting, "FogColor", Settings.WorldFogColor)
+        if Settings.WorldClearAtmosphere then
+            for _, object in ipairs(Lighting:GetChildren()) do
+                if object:IsA("Atmosphere") then
+                    protected("atmosphere-clear", function()
+                        worldWrite(object, "Density", 0)
+                        worldWrite(object, "Haze", 0)
+                    end)
+                end
+            end
+        else
+            for object in pairs(worldOriginals) do if object ~= Lighting then restoreWorldObject(object) end end
+        end
+    end
+    connect(Lighting.ChildAdded, "world-atmosphere-added", function(child)
+        if Settings.WorldEnabled and Settings.WorldClearAtmosphere and child:IsA("Atmosphere") then applyWorld() end
+    end)
+
+    local mainAim = section(main.left, "AIMBOT")
+    local mainRules = section(main.left, "FILTERS")
+    local mainAuto = section(rage.left, "RAGE / AUTO")
+    local mainTrigger = section(main.right, "TRIGGER", true)
+    local mainHitbox = section(rage.right, "HITBOX PROXY")
+    local visualGeometry = section(visuals.left, "PLAYER OVERLAY")
+    local visualChams = section(visuals.left, "CHAMS / MATERIAL")
+    local visualColors = section(visuals.right, "COLORS / HEX")
+    local visualSight = section(visuals.right, "CROSSHAIR")
+    local worldLight = section(world.left, "LIGHTING")
+    local worldFog = section(world.left, "FOG / ATMOSPHERE")
+    local worldWeather = section(world.right, "WEATHER")
+    local worldColors = section(world.right, "WORLD COLORS")
+    local worldSession = section(world.right, "OVERRIDES")
+    local miscMovement = section(misc.left, "MOVEMENT")
+    local miscCamera = section(misc.right, "FREE CAMERA")
+    local miscSession = section(misc.right, "SESSION")
+    local miscInterface = section(misc.right, "INTERFACE")
+    local function refreshAutoShotLock()
+        featureLocks.Trigger, featureLocks.TriggerDelay = Settings.AutoShot, Settings.AutoShot
+        tween(mainTrigger, { GroupTransparency = Settings.AutoShot and 0.62 or 0 }, 0.18)
+        local caption = mainTrigger.Parent:FindFirstChildOfClass("TextLabel")
+        if caption then caption.Text = Settings.AutoShot and "TRIGGER / AUTO SHOOT ACTIVE" or "TRIGGER" end
+    end
+    toggle(mainAuto, "Auto Aim", "Мгновенное наведение без ПКМ и сглаживания", "AutoAim")
+    toggle(mainAuto, "Auto Shoot", "Клик по подтверждённой цели · блокирует Triggerbot", "AutoShot", function(enabled)
+        if enabled and not clickMouse then
+            Settings.AutoShot = false
+            toggleRefreshers.AutoShot(true)
+            notify("Auto Shoot недоступен: исполнитель не предоставляет mouse1click.")
+        end
+        refreshAutoShotLock()
+    end)
+    slider(mainAuto, "Интервал Auto Shoot", "AutoShotDelay", 20, 600, 10, " ms")
+    toggle(mainAuto, "Первый выстрел сразу", "Без задержки захвата · темп оружия не меняется", "RageImmediateShot")
+    do
+        local targeting = section(rage.left, "TARGETING")
+        local rules = section(rage.right, "RAGE / FILTERS")
+        slider(targeting, "Rage FOV", "RageFOV", 50, 1200, 10, " px")
+        toggle(targeting, "Rage FOV Circle", "Показывать область выбора Rage", "RageShowFOV")
+        local target, priority
+        target = action(targeting, "Rage Target", "Часть тела для резкого наведения", "Head", function()
+            Settings.RageTargetPart = Settings.RageTargetPart == "Head" and "HumanoidRootPart" or "Head"
+            extras.Refresh.RageTargetPart()
+        end)
+        extras.Refresh.RageTargetPart = function() target.Text = Settings.RageTargetPart == "Head" and "Head" or "RootPart" end
+        local priorityLabels = { Crosshair = "К прицелу", Distance = "Ближайший", Health = "Меньше HP" }
+        priority = action(targeting, "Приоритет Rage", "Прицел / дистанция / здоровье", "К прицелу", function()
+            Settings.RagePriority = ({ Crosshair = "Distance", Distance = "Health", Health = "Crosshair" })[Settings.RagePriority]
+            extras.Refresh.RagePriority()
+        end)
+        extras.Refresh.RagePriority = function() priority.Text = priorityLabels[Settings.RagePriority] end
+        toggle(targeting, "Удерживать цель", "Сохранять цель, пока она проходит фильтры", "RageHoldTarget")
+        toggle(rules, "Rage Team Check", "Исключать союзников для Rage", "RageTeamCheck")
+        toggle(rules, "Rage Visible Check", "Наводиться только на видимую цель", "RageVisibleCheck")
+        toggle(rules, "Rage Prediction", "Линейное упреждение · для снарядного оружия", "RagePrediction")
+        slider(rules, "Упреждение Rage", "RagePredictionMs", 0, 300, 10, " ms")
+    end
+    refreshAutoShotLock()
+    toggle(mainAim, "Aimbot", "Плавное наведение по ПКМ · приоритет у Rage", "Aim")
+    slider(mainAim, "Радиус FOV", "FOV", 50, 300, 1, " px")
+    toggle(visualGeometry, "Wallhack / ESP", "Главный переключатель визуализации игроков", "ESP")
+    toggle(visualGeometry, "ESP тиммейтов", "Показывать союзников · включая Chams", "ESPTeammates")
+    local targetButton
+    targetButton = action(mainAim, "Точка наведения", "Часть тела для выбора цели", "Head", function()
+        Settings.TargetPart = Settings.TargetPart == "Head" and "HumanoidRootPart" or "Head"
+        targetButton.Text = Settings.TargetPart == "Head" and "Head" or "RootPart"
+    end)
+    slider(mainAim, "Скорость наведения", "Smoothness", 4, 30, 1, "")
+    slider(mainAim, "Мёртвая зона", "LegitDeadzone", 0, 12, 1, " px")
+    toggle(mainAim, "Показывать FOV", "Область плавного наведения Legit", "ShowFOV")
+    toggle(mainRules, "Проверка команды", "Фильтр целей · не влияет на ESP", "TeamCheck")
+    toggle(mainRules, "Проверка видимости", "Aimbot выбирает только цели без преград", "VisibleCheck")
+    toggle(mainAim, "Prediction", "Линейное упреждение движущейся цели", "Prediction")
+    slider(mainAim, "Упреждение", "PredictionMs", 0, 300, 10, " ms")
+    toggle(mainTrigger, "Triggerbot", "Автоклик по цели в центре · скрой меню", "Trigger", function(enabled)
+        if enabled and not clickMouse then
+            Settings.Trigger = false
+            toggleRefreshers.Trigger(true)
+            notify("Triggerbot недоступен: исполнитель не предоставляет mouse1click.")
+        end
+    end)
+    slider(mainTrigger, "Задержка Triggerbot", "TriggerDelay", 50, 500, 10, " ms")
+    toggle(mainHitbox, "Hitbox Proxy", "Отдельная локальная область без связей с телом", "Hitbox", function()
+        if not Settings.Hitbox then restoreHitboxes() elseif updateHitboxes then updateHitboxes() end
+    end)
+    slider(mainHitbox, "Размер Hitbox", "HitboxSize", 2, 15, 1, " studs", function()
+        if updateHitboxes then updateHitboxes() end
+    end)
+    toggle(visualGeometry, "2D Boxes", "Рамки по проекции частей персонажа", "Boxes")
+    toggle(visualGeometry, "Tracers", "Линии от центра экрана до игроков", "Tracers")
+    toggle(visualGeometry, "Bone ESP", "Линии частей тела · стандартные R6 / R15", "Bones")
+    toggle(visualGeometry, "Имена", "DisplayName и @username", "Names")
+    toggle(visualGeometry, "Здоровье", "Полоса HP и числовое значение", "Health")
+    toggle(visualGeometry, "Дистанция", "Расстояние от камеры в studs", "Distance")
+    toggle(visualGeometry, "Off-screen arrows", "Указатели целей вне экрана и позади камеры", "Arrows")
+    slider(visualGeometry, "Отклик ESP", "ESPSmoothing", 12, 60, 2, " /s")
+    slider(visualGeometry, "Дальность ESP", "MaxDistance", 250, 5000, 50, " studs")
+    toggle(visualSight, "Кастомный прицел", "Независим от главного переключателя ESP", "Crosshair")
+    slider(visualSight, "Длина прицела", "CrosshairSize", 3, 20, 1, " px")
+    slider(visualSight, "Зазор прицела", "CrosshairGap", 0, 12, 1, " px")
+    slider(visualSight, "Толщина прицела", "CrosshairThickness", 1, 4, 1, " px")
+    toggle(miscCamera, "Freecam", "WASD / Space / Ctrl · ПКМ обзор · скрой меню", "Freecam", function(enabled)
+        if enabled and Settings.Fly then
+            Settings.Fly = false
+            if extras.StopFly then extras.StopFly() end
+            toggleRefreshers.Fly(true)
+        end
+        local ok = protected("freecam-toggle", setFreecam, enabled)
+        if not ok then
+            Settings.Freecam = false
+            protected("freecam-recovery", stopFreecam)
+            toggleRefreshers.Freecam(true)
+            notify("Не удалось включить Freecam. Подробности — в консоли.")
+        end
+    end)
+    slider(miscCamera, "Скорость Freecam", "FreecamSpeed", 8, 160, 4, " studs/s")
+    toggle(miscMovement, "Bhop", "Автоматический прыжок при движении по земле", "Bhop")
+    toggle(miscMovement, "Noclip", "Проход сквозь стены · только твой персонаж", "Noclip", function(enabled)
+        if not enabled and extras.StopNoclip then extras.StopNoclip() end
+    end)
+    toggle(miscMovement, "Fly", "WASD · Space вверх · Ctrl вниз · Shift ×2", "Fly", function(enabled)
+        if enabled and Settings.Freecam then
+            Settings.Freecam = false
+            stopFreecam()
+            toggleRefreshers.Freecam(true)
+        end
+        if not enabled and extras.StopFly then extras.StopFly() end
+    end)
+    slider(miscMovement, "Скорость Fly", "FlySpeed", 10, 200, 5, " studs/s")
+    toggle(miscMovement, "Изменять WalkSpeed", "Значение применяется при изменении и респавне", "SpeedEnabled", applyMovement)
+    slider(miscMovement, "WalkSpeed", "WalkSpeed", 0, 150, 1, "", applyMovement)
+    toggle(miscMovement, "Изменять JumpPower", "При включении используется UseJumpPower", "JumpEnabled", applyMovement)
+    slider(miscMovement, "JumpPower", "JumpPower", 0, 200, 1, "", applyMovement)
+
+    -- Подтверждение встроено в кнопку, чтобы не выйти из игры случайным нажатием.
+    local confirmations = {}
+    local function confirm(key, description, callback)
+        local now = os.clock()
+        if confirmations[key] and now - confirmations[key] < 3 then
+            confirmations[key] = nil
+            local ok = protected(key, callback)
+            if not ok then notify("Не удалось выполнить действие. Подробности — в консоли.") end
+        else
+            confirmations[key] = now
+            notify(description .. " Нажми повторно в течение 3 секунд.")
+        end
+    end
+    action(miscSession, "Перезайти", "Попытаться вернуться в текущий сервер", "Rejoin", function()
+        confirm("rejoin", "Перезайти в игру?", function()
+            notify("Подключение к серверу…")
+            if game.JobId ~= "" then
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, localPlayer)
+            else
+                TeleportService:Teleport(game.PlaceId, localPlayer)
+            end
+        end)
+    end)
+    connect(TeleportService.TeleportInitFailed, "teleport-failed", function(player, _, message)
+        if player == localPlayer then notify("Не удалось перезайти: " .. tostring(message)) end
+    end)
+    action(miscSession, "Сброс персонажа", "Локальный сброс Humanoid", "Reset", function()
+        confirm("reset", "Сбросить персонажа?", function()
+            local character = localPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            assert(humanoid and humanoid.Health > 0, "Живой персонаж не найден")
+            humanoid.Health = 0
+            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+        end)
+    end, true)
+
+    toggle(mainHitbox, "Показать область", "Только визуализация локального proxy", "HitboxVisible")
+    colorPicker(visualColors, "Боксы и линии", "BoxColor")
+    colorPicker(visualColors, "Скелет", "BoneColor")
+    colorPicker(visualColors, "Текст", "TextColor")
+    colorPicker(visualColors, "Полоса HP", "HealthColor")
+    toggle(visualChams, "Chams", "Визуальные копии · сквозь стены Highlight", "Chams", function()
+        if not Settings.Chams then restoreChams() elseif updateChams then updateChams() end
+    end)
+    local materialButton
+    materialButton = action(visualChams, "Материал", "Для видимой поверхности копии", "Neon", function()
+        local modes = { Neon = "Glass", Glass = "SmoothPlastic", SmoothPlastic = "Neon" }
+        Settings.ChamsMaterial = modes[Settings.ChamsMaterial] or "Neon"
+        materialButton.Text = Settings.ChamsMaterial
+    end)
+    slider(visualChams, "Непрозрачность", "ChamsOpacity", 10, 100, 5, "%")
+    toggle(visualChams, "Контур", "Обводка поверх стен", "ChamsOutline")
+    colorPicker(visualChams, "Цвет Chams", "ChamsColor")
+    toggle(worldLight, "Настройки мира", "Включить локальные параметры освещения", "WorldEnabled", applyWorld)
+    slider(worldLight, "Время суток", "WorldTime", 0, 1439, 1, "", applyWorld, function(value)
+        return string.format("%02d:%02d", math.floor(value / 60), value % 60)
+    end)
+    slider(worldLight, "Яркость", "WorldBrightness", 0, 100, 1, "", applyWorld, function(value) return string.format("%.1f", value / 10) end)
+    toggle(worldLight, "Глобальные тени", "Lighting.GlobalShadows", "WorldShadows", applyWorld)
+    slider(worldFog, "Дальность тумана", "WorldFogEnd", 100, 100000, 100, "", applyWorld)
+    toggle(worldFog, "Убрать дымку", "Плотность и Haze у Atmosphere → 0", "WorldClearAtmosphere", applyWorld)
+    colorPicker(worldColors, "Ambient", "WorldAmbient", applyWorld)
+    colorPicker(worldColors, "OutdoorAmbient", "WorldOutdoorAmbient", applyWorld)
+    colorPicker(worldColors, "Цвет тумана", "WorldFogColor", applyWorld)
+    toggle(worldSession, "Удерживать значения", "Повторять после изменений скриптами игры", "WorldKeep", applyWorld)
+    action(worldSession, "Вернуть мир", "Восстановить сохранённые параметры", "Restore", function()
+        Settings.WorldEnabled = false
+        toggleRefreshers.WorldEnabled(true)
+        restoreWorld()
+        if extras.StopAtmosphere then Settings.AtmosphereEnabled = false; extras.StopAtmosphere(); toggleRefreshers.AtmosphereEnabled(true) end
+    end)
+    toggle(worldWeather, "Погода", "Локальные эффекты вокруг камеры", "Weather", function(enabled)
+        if not enabled then stopWeather() end
+    end)
+    local weatherModeButton
+    weatherModeButton = action(worldWeather, "Тип погоды", "Дождь / снег / гроза / метель", "Дождь", function()
+        local nextMode = { Rain = "Snow", Snow = "Storm", Storm = "Blizzard", Blizzard = "Rain" }
+        local titles = { Rain = "Дождь", Snow = "Снег", Storm = "Гроза", Blizzard = "Метель" }
+        Settings.WeatherMode = nextMode[Settings.WeatherMode] or "Rain"
+        weatherModeButton.Text = titles[Settings.WeatherMode]
+        stopWeather()
+    end)
+    slider(worldWeather, "Интенсивность", "WeatherIntensity", 10, 100, 5, "%")
+    slider(worldWeather, "Ветер", "WeatherWind", 0, 30, 1, "")
+    toggle(worldWeather, "Учитывать крышу", "Осадки скрываются под укрытием", "WeatherRoofCheck")
+    toggle(worldWeather, "Молнии", "Редкие короткие вспышки в режиме грозы", "WeatherLightning")
+    toggle(miscInterface, "Watermark", "FPS · плейс · ping · игроки", "Watermark")
+    toggle(miscInterface, "Карточка цели", "Ник, HP и дистанция · при закрытом меню", "TargetCard", function(enabled)
+        if not enabled and extras.HideTargetCard then extras.HideTargetCard() end
+    end)
+    action(miscInterface, "Отключить функции", "End · восстановить персонажа и мир", "Disable all", function()
+        if extras.DisableAll then extras.DisableAll() end
+    end, true)
+    action(miscInterface, "Наш Telegram", "Новости и обновления NEXUS", "Telegram", function()
+        if extras.ShowTelegram then extras.ShowTelegram() end
+    end)
+
+    -- Отдельная область локальных переменных: не расходует лимит boot-функции.
+    extras.BuildEnvironment = function()
+        local rgb = Color3.fromRGB
+        local presets = {
+            Sunset = { time = 18.1, bright = 2.1, ambient = rgb(103, 78, 102), outdoor = rgb(151, 117, 110),
+                tint = rgb(255, 222, 196), fog = rgb(226, 172, 146), density = 0.27, haze = 1.4, saturation = 0.08 },
+            Night = { time = 0.5, bright = 1.2, ambient = rgb(45, 49, 76), outdoor = rgb(76, 85, 116),
+                tint = rgb(201, 217, 255), fog = rgb(91, 112, 155), density = 0.22, haze = 0.7, saturation = -0.12 },
+            Morning = { time = 7.2, bright = 2.5, ambient = rgb(121, 115, 108), outdoor = rgb(161, 156, 143),
+                tint = rgb(255, 243, 220), fog = rgb(225, 223, 208), density = 0.25, haze = 1.1, saturation = 0.02 },
+            Horror = { time = 1.5, bright = 0.65, ambient = rgb(40, 44, 43), outdoor = rgb(65, 74, 70),
+                tint = rgb(195, 212, 202), fog = rgb(74, 91, 85), density = 0.43, haze = 2.5, saturation = -0.45 },
+        }
+        local atmosphereSaved, skySaved = {}, {}
+        local grade, bloom, addedAtmosphere, addedSky
+        local atmosphericActive = false
+        local effects, effectTime = {}, 0
+        local faces = { { "Bk", "Back", "bk" }, { "Dn", "Down", "dn" }, { "Ft", "Front", "ft" },
+            { "Lf", "Left", "lf" }, { "Rt", "Right", "rt" }, { "Up", "Up", "up" } }
+
+        -- Каждое свойство хранит исходное и последнее записанное значение.
+        -- Чужие изменения после нашего последнего кадра не откатываются.
+        local function write(saved, object, key, value)
+            local record = saved[object]
+            if not record then record = {}; saved[object] = record end
+            if not record[key] then record[key] = { original = object[key] } end
+            if object[key] ~= value then object[key] = value end
+            record[key].last = object[key]
+        end
+        local function restore(saved)
+            for object, properties in pairs(saved) do
+                if object.Parent or object == Lighting then
+                    for key, value in pairs(properties) do
+                        protected("environment-restore-" .. key, function()
+                            if object[key] == value.last then object[key] = value.original end
+                        end)
+                    end
+                end
+                saved[object] = nil
+            end
+        end
+        local function remove(object) if object then object:Destroy() end end
+        extras.StopAtmosphere = function()
+            restore(atmosphereSaved)
+            remove(grade); remove(bloom); remove(addedAtmosphere)
+            grade, bloom, addedAtmosphere, atmosphericActive = nil, nil, nil, false
+        end
+        local function stopSky()
+            restore(skySaved); remove(addedSky); addedSky = nil
+        end
+        local function stopParticles(key)
+            local effect = effects[key]
+            if effect then effect.folder:Destroy(); effects[key] = nil end
+        end
+        stopEnvironment = function()
+            extras.StopAtmosphere(); stopSky()
+            stopParticles("Character"); stopParticles("Ambient")
+        end
+        local function blend(saved, object, key, target, alpha)
+            local current = object[key]
+            write(saved, object, key, typeof(target) == "Color3" and current:Lerp(target, alpha)
+                or current + (target - current) * alpha)
+        end
+        local function atmosphereFrame(dt)
+            if not Settings.AtmosphereEnabled then
+                if atmosphericActive then extras.StopAtmosphere() end
+                return
+            end
+            if not atmosphericActive then
+                restoreWorld()
+                Settings.WorldEnabled = false; toggleRefreshers.WorldEnabled(true)
+                atmosphericActive = true
+                grade = create("ColorCorrectionEffect", { Name = "NexusAtmosphereGrade", Enabled = true,
+                    TintColor = rgb(255, 255, 255), Contrast = 0, Saturation = 0, Brightness = 0 }, Lighting)
+                bloom = create("BloomEffect", { Name = "NexusAtmosphereBloom", Enabled = true,
+                    Intensity = 0, Size = 24, Threshold = 1.5 }, Lighting)
+            end
+            local preset = presets[Settings.AtmospherePreset] or presets.Sunset
+            local alpha, strength = 1 - math.exp(-dt * 2), Settings.AtmosphereStrength / 100
+            -- Часы переходят кратчайшим путём через полночь.
+            local clock = Lighting.ClockTime
+            write(atmosphereSaved, Lighting, "ClockTime", (clock + ((preset.time - clock + 12) % 24 - 12) * alpha) % 24)
+            blend(atmosphereSaved, Lighting, "Brightness", preset.bright, alpha)
+            blend(atmosphereSaved, Lighting, "Ambient", preset.ambient, alpha)
+            blend(atmosphereSaved, Lighting, "OutdoorAmbient", preset.outdoor, alpha)
+            grade.TintColor = grade.TintColor:Lerp(rgb(255, 255, 255):Lerp(preset.tint, strength), alpha)
+            grade.Saturation = grade.Saturation + (preset.saturation * strength - grade.Saturation) * alpha
+            grade.Contrast = grade.Contrast + (0.08 * strength - grade.Contrast) * alpha
+            bloom.Intensity = bloom.Intensity + (0.18 * strength - bloom.Intensity) * alpha
+            local found = false
+            for _, object in ipairs(Lighting:GetChildren()) do
+                if object:IsA("Atmosphere") then
+                    found = true
+                    blend(atmosphereSaved, object, "Density", preset.density * strength, alpha)
+                    blend(atmosphereSaved, object, "Haze", preset.haze * strength, alpha)
+                    blend(atmosphereSaved, object, "Color", preset.fog, alpha)
+                end
+            end
+            if not found then
+                addedAtmosphere = create("Atmosphere", { Name = "NexusAtmosphere", Density = 0,
+                    Haze = 0, Color = preset.fog }, Lighting)
+            end
+        end
+        local function skyFrame()
+            if not Settings.CustomSky then if next(skySaved) or addedSky then stopSky() end; return end
+            local found = false
+            for _, sky in ipairs(Lighting:GetChildren()) do
+                if sky:IsA("Sky") then
+                    found = true
+                    for _, face in ipairs(faces) do
+                        local id = Settings["Sky" .. face[1]]
+                        write(skySaved, sky, "Skybox" .. face[1], id == "" and
+                            ("rbxasset://textures/sky/sky512_" .. face[3] .. ".tex") or ("rbxassetid://" .. id))
+                    end
+                    write(skySaved, sky, "CelestialBodiesShown", true)
+                    write(skySaved, sky, "StarCount", Settings.SkyStars)
+                    write(skySaved, sky, "SunAngularSize", Settings.SkySun)
+                    write(skySaved, sky, "MoonAngularSize", Settings.SkyMoon)
+                end
+            end
+            if not found then addedSky = create("Sky", { Name = "NexusSky" }, Lighting) end
+        end
+        local function makeEmitter(part, mode, rate)
+            local sparkle = mode == "Sparks" or mode == "Orbit"
+            local size = Settings.ParticleSize / 100
+            return create("ParticleEmitter", {
+                Name = "NexusParticleEmitter", Enabled = true,
+                Texture = mode == "Snow" and "rbxasset://textures/particles/smoke_main.dds"
+                    or "rbxasset://textures/particles/sparkles_main.dds",
+                Rate = rate, Lifetime = NumberRange.new(mode == "Sparks" and 0.4 or 1.3, mode == "Sparks" and 1 or 2.5),
+                Speed = NumberRange.new(mode == "Snow" and 0.8 or 0.15, sparkle and 2 or 0.6),
+                SpreadAngle = Vector2.new(180, 180), Rotation = NumberRange.new(0, 360), RotSpeed = NumberRange.new(-35, 35),
+                Color = ColorSequence.new(Settings.ParticleColor),
+                Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size * 0.3),
+                    NumberSequenceKeypoint.new(0.2, size), NumberSequenceKeypoint.new(1, 0) }),
+                Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1),
+                    NumberSequenceKeypoint.new(0.15, 0.15), NumberSequenceKeypoint.new(0.7, 0.3), NumberSequenceKeypoint.new(1, 1) }),
+                LightEmission = mode == "Snow" and 0.2 or 0.85, LightInfluence = 0,
+                Acceleration = Vector3.new(0, mode == "Snow" and -1.2 or (mode == "Sparks" and 2 or 0.2), 0),
+                Drag = 0.5, LockedToPart = false, VelocityInheritance = 0, ZOffset = 0,
+            }, part)
+        end
+        local function particleFrame(key, center, identity, dt)
+            if not center then stopParticles(key); return end
+            local mode = Settings.ParticleMode
+            local signature = table.concat({ mode, Settings.ParticleDensity, Settings.ParticleRadius,
+                Settings.ParticleSize, toHex(Settings.ParticleColor) }, ":")
+            local effect = effects[key]
+            if effect and (effect.signature ~= signature or effect.identity ~= identity
+                or (center - effect.center).Magnitude > 80) then stopParticles(key); effect = nil end
+            if not effect then
+                effect = { folder = create("Folder", { Name = "Nexus" .. key .. "Particles" }, worldFolder),
+                    signature = signature, identity = identity, parts = {}, center = center }
+                effects[key] = effect -- register before construction so failures can clean up
+                local count = mode == "Orbit" and key == "Character" and 4 or 1
+                for i = 1, count do
+                    local radius = key == "Ambient" and 28 or Settings.ParticleRadius * 2
+                    local part = create("Part", { Name = "NexusParticleCarrier", Transparency = 1,
+                        Size = count == 1 and Vector3.new(radius, key == "Ambient" and 18 or 5, radius) or Vector3.new(0.1, 0.1, 0.1),
+                        Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false, CastShadow = false,
+                        CFrame = CFrame.new(center) }, effect.folder)
+                    table.insert(effect.parts, part)
+                    makeEmitter(part, mode, Settings.ParticleDensity / count)
+                end
+            end
+            effect.center = center
+            for i, part in ipairs(effect.parts) do
+                local offset = Vector3.new(0, key == "Ambient" and 4 or 0, 0)
+                if #effect.parts > 1 then
+                    local angle = effectTime * Settings.ParticleSpeed / 25 + (i - 1) * math.pi / 2
+                    offset = Vector3.new(math.cos(angle) * Settings.ParticleRadius,
+                        math.sin(angle * 1.5) * 1.6, math.sin(angle) * Settings.ParticleRadius)
+                end
+                part.CFrame = CFrame.new(center + offset)
+            end
+        end
+        extras.EnvironmentFrame = function(camera, dt)
+            dt = math.clamp(dt, 0, 0.1); effectTime = effectTime + dt
+            atmosphereFrame(dt); skyFrame()
+            local character = localPlayer.Character
+            local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local position = rootPart and humanoid and humanoid.Health > 0 and rootPart.Position or nil
+            if not camera or introActive then position = nil end
+            if position and not Settings.ParticleFirstPerson and (camera.CFrame.Position - position).Magnitude < 2.5 then position = nil end
+            particleFrame("Character", Settings.CharacterParticles and position or nil, character, dt)
+            particleFrame("Ambient", Settings.AmbientParticles and camera and not introActive and camera.CFrame.Position or nil, camera, dt)
+        end
+
+        local function cycle(parent, title, key, values, labels, callback)
+            local item
+            item = action(parent, title, "Нажми для следующего варианта", labels[Settings[key]], function()
+                local index = 1
+                for i, value in ipairs(values) do if value == Settings[key] then index = i % #values + 1; break end end
+                Settings[key] = values[index]; item.Text = labels[Settings[key]]
+                if callback then callback() end
+            end)
+            extras.Refresh[key] = function() item.Text = labels[Settings[key]] end
+        end
+        local atmosphereUI = section(world.left, "NEXUS ATMOSPHERE")
+        toggle(atmosphereUI, "Атмосферный пресет", "Заменяет ручное освещение · плавный переход", "AtmosphereEnabled", function(enabled)
+            if enabled then
+                Settings.WorldEnabled = false; restoreWorld(); toggleRefreshers.WorldEnabled(true)
+            else extras.StopAtmosphere() end
+        end)
+        cycle(atmosphereUI, "Стиль атмосферы", "AtmospherePreset", { "Sunset", "Night", "Morning", "Horror" },
+            { Sunset = "Закат", Night = "Ночь", Morning = "Утро", Horror = "Хоррор" })
+        slider(atmosphereUI, "Сила эффектов", "AtmosphereStrength", 10, 100, 5, "%")
+        local skyUI = section(world.left, "CUSTOM SKY")
+        toggle(skyUI, "Свое небо", "Пустые ID — стандартное небо Roblox", "CustomSky", function(enabled) if not enabled then stopSky() end end)
+        slider(skyUI, "Количество звезд", "SkyStars", 0, 5000, 100, "")
+        slider(skyUI, "Размер солнца", "SkySun", 0, 30, 1, "°")
+        slider(skyUI, "Размер луны", "SkyMoon", 0, 40, 1, "°")
+        for _, face in ipairs(faces) do
+            local key = "Sky" .. face[1]
+            local holder = row(skyUI, "Sky " .. face[2], "ID изображения для стороны куба", 92)
+            local input = create("TextBox", { Name = key .. "Input", Position = UDim2.fromOffset(12, 57),
+                Size = UDim2.new(1, -24, 0, 25), BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
+                ClearTextOnFocus = false, Text = Settings[key], PlaceholderText = "Roblox asset ID", TextSize = 12,
+                Font = Enum.Font.Code, TextColor3 = Theme.Text }, holder)
+            corner(input, 5)
+            extras.Refresh[key] = function() input.Text = Settings[key] end
+            connect(input.FocusLost, "sky-id-" .. key, function()
+                local value = input.Text:gsub("%s+", ""):gsub("^rbxassetid://", "")
+                if value == "" or (#value <= 20 and value:match("^%d+$")) then Settings[key] = value
+                else notify("Нужен числовой Roblox asset ID или пустое поле.") end
+                input.Text = Settings[key]
+            end)
+        end
+        local particlesUI = section(world.right, "PARTICLES")
+        toggle(particlesUI, "Частицы персонажа", "Локальная аура · восстанавливается после респавна", "CharacterParticles",
+            function(enabled) if not enabled then stopParticles("Character") end end)
+        toggle(particlesUI, "Частицы окружения", "Частицы в пространстве вокруг камеры", "AmbientParticles",
+            function(enabled) if not enabled then stopParticles("Ambient") end end)
+        cycle(particlesUI, "Стиль частиц", "ParticleMode", { "Fireflies", "Sparks", "Snow", "Orbit" },
+            { Fireflies = "Светлячки", Sparks = "Искры", Snow = "Снег", Orbit = "Орбита" })
+        slider(particlesUI, "Плотность частиц", "ParticleDensity", 5, 80, 5, "/с")
+        slider(particlesUI, "Радиус ауры", "ParticleRadius", 2, 12, 1, "")
+        slider(particlesUI, "Размер частиц", "ParticleSize", 10, 100, 5, "%")
+        slider(particlesUI, "Скорость орбиты", "ParticleSpeed", 10, 100, 5, "%")
+        colorPicker(particlesUI, "Цвет частиц", "ParticleColor")
+        toggle(particlesUI, "Аура от первого лица", "По умолчанию скрывается у самой камеры", "ParticleFirstPerson")
+    end
+    extras.BuildEnvironment()
+    extras.BuildEnvironment = nil
+
+    -- Подгонка по экрану, затем пользовательский масштаб; окно не уходит за край.
+    local panelWidth, panelHeight = 840, 620
+    local panelPosition = Vector2.new(80, 100)
+    local centered = false
+    local function viewportSize()
+        local camera = workspace.CurrentCamera
+        return camera and camera.ViewportSize or Vector2.new(1280, 720)
+    end
+    local function fitWindow()
+        local viewport = viewportSize()
+        panel.Size = UDim2.fromOffset(panelWidth, panelHeight)
+        local fit = math.min((viewport.X - 24) / panelWidth, (viewport.Y - 70) / panelHeight)
+        local scale = math.max(0.1, math.min(Settings.Scale / 100, fit))
+        uiScale.Scale = scale
+        extras.UpdateIconScale(scale)
+        if not centered then
+            panelPosition = Vector2.new((viewport.X - panelWidth * scale) / 2, (viewport.Y - panelHeight * scale) / 2)
+            centered = true
+        end
+        panelPosition = Vector2.new(
+            math.clamp(panelPosition.X, 8, math.max(8, viewport.X - panelWidth * scale - 8)),
+            math.clamp(panelPosition.Y, 40, math.max(40, viewport.Y - panelHeight * scale - 8)))
+        panel.Position = UDim2.fromOffset(panelPosition.X, panelPosition.Y)
+    end
+    slider(miscInterface, "Масштаб меню", "Scale", 70, 130, 5, "%", fitWindow)
+    action(miscInterface, "Выгрузить", "Очистить UI, мир, копии и обработчики", "Unload", destroy, true)
+    fitWindow()
+
+    local menuOpen, menuGeneration = false, 0
+    local rightMouseHeld = false
+    local windowFocused = true
+    local function setMenu(open)
+        if not open and extras.CloseTelegram then extras.CloseTelegram() end
+        menuOpen = open
+        menuGeneration = menuGeneration + 1
+        local generation = menuGeneration
+        activeSlider, dragWindow = nil, nil
+        if open and not panel.Visible then
+            panel.Position = UDim2.fromOffset(panelPosition.X, panelPosition.Y + 14)
+        end
+        if open then panel.Visible = true end
+        tween(panel, { GroupTransparency = open and 0 or 1,
+            Position = UDim2.fromOffset(panelPosition.X, panelPosition.Y + (open and 0 or 8)) }, 0.25)
+        if not open then
+            task.delay(0.27, function()
+                if alive and menuGeneration == generation then
+                    protected("menu-hide", function() panel.Visible = false end)
+                end
+            end)
+        end
+    end
+    -- Информационное окно внутри меню: никакого автозапуска браузера/автокопирования.
+    -- URL постоянный; текст поля никогда не передаётся исполнителю как команда.
+    extras.BuildTelegram = function()
+        local url = "https://t.me/nexuscript1"
+        local shade = create("TextButton", { Name = "TelegramModal", Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.3,
+            BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+            Visible = false, Active = true, Modal = true, ZIndex = 400 }, panel)
+        corner(shade, 8)
+        local dialog = create("CanvasGroup", { Name = "TelegramDialog", AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(414, 254),
+            BackgroundColor3 = Theme.Background, BorderSizePixel = 0, GroupTransparency = 1,
+            Active = true, ZIndex = 401 }, shade)
+        corner(dialog, 12)
+        stroke(dialog)
+        text(dialog, "NEXUS / COMMUNITY", UDim2.fromOffset(22, 17), UDim2.fromOffset(370, 16), 10, Theme.Accent)
+        text(dialog, "Наш Telegram", UDim2.fromOffset(22, 41), UDim2.fromOffset(370, 28), 23, Theme.Text, true)
+        text(dialog, "Обновления скрипта и новости NEXUS.", UDim2.fromOffset(22, 79), UDim2.fromOffset(370, 20), 12, Theme.Muted)
+        local link = create("TextBox", { Name = "TelegramLink", Position = UDim2.fromOffset(22, 112),
+            Size = UDim2.fromOffset(370, 35), BackgroundColor3 = Theme.Card, BorderSizePixel = 0,
+            Text = url, ClearTextOnFocus = false, Font = Enum.Font.Code, TextSize = 14,
+            TextColor3 = Theme.Text }, dialog)
+        corner(link, 6)
+        stroke(link)
+        local status = text(dialog, "Кнопка копирует ссылку. Открой её в браузере.", UDim2.fromOffset(22, 154),
+            UDim2.fromOffset(370, 36), 11, Theme.Muted)
+        status.Name, status.TextWrapped, status.TextTruncate = "TelegramStatus", true, Enum.TextTruncate.None
+        local copy = button(dialog, "Скопировать ссылку", UDim2.fromOffset(22, 202), UDim2.fromOffset(228, 32), Theme.DarkAccent)
+        copy.Name = "TelegramCopy"
+        local close = button(dialog, "Закрыть", UDim2.fromOffset(262, 202), UDim2.fromOffset(130, 32), Theme.Card)
+        close.Name = "TelegramClose"
+        local busy, generation = false, 0
+        connect(link.FocusLost, "telegram-link-reset", function() link.Text = url end)
+        extras.CloseTelegram = function()
+            generation = generation + 1
+            extras.TelegramOpen = false
+            shade.Visible = false
+            if activeTweens[dialog] then activeTweens[dialog]:Cancel() end
+            dialog.GroupTransparency = 1
+            if UserInputService:GetFocusedTextBox() == link then link:ReleaseFocus() end
+        end
+        extras.ShowTelegram = function()
+            if not alive then return end
+            generation = generation + 1
+            extras.TelegramOpen = true
+            rightMouseHeld, activeSlider, dragWindow = false, nil, nil
+            if not menuOpen then setMenu(true) end
+            link.Text = url
+            copy.Text = busy and "Копирование…" or "Скопировать ссылку"
+            status.Text = "Кнопка копирует ссылку. Открой её в браузере."
+            shade.Visible, dialog.GroupTransparency = true, 1
+            tween(dialog, { GroupTransparency = 0 }, 0.2)
+        end
+        connect(copy.Activated, "telegram-copy", function()
+            if busy or not shade.Visible then return end
+            local clipboard = type(setclipboard) == "function" and setclipboard or environment.setclipboard
+            if type(clipboard) ~= "function" then
+                status.Text = "Копирование недоступно. Выдели ссылку в поле и нажми Ctrl+C."
+                return
+            end
+            busy = true
+            copy.Text = "Копирование…"
+            local currentGeneration = generation
+            local ok, result = pcall(clipboard, url)
+            busy = false
+            if not alive then return end
+            if currentGeneration ~= generation then copy.Text = "Скопировать ссылку"; return end
+            if ok and result ~= false then
+                copy.Text = "Скопировано"
+                status.Text = "Ссылка скопирована. Вставь её в адресную строку браузера."
+            else
+                copy.Text = "Повторить"
+                status.Text = "Не удалось скопировать. Выдели ссылку вручную и нажми Ctrl+C."
+            end
+        end)
+        connect(close.Activated, "telegram-close", extras.CloseTelegram)
+    end
+    extras.BuildTelegram()
+    extras.BuildTelegram = nil
+    -- Заставка не блокирует поток: отложенные этапы проверяют alive.
+    extras.StartIntro = function()
+        local dim = create("Frame", { Name = "NexusIntro", Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 1,
+            BorderSizePixel = 0, ZIndex = 1000, Active = true }, root)
+        local logo = create("CanvasGroup", { Name = "IntroLogo", AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.48), Size = UDim2.fromOffset(300, 92),
+            BackgroundTransparency = 1, GroupTransparency = 0, ZIndex = 1001 }, dim)
+        local scale = create("UIScale", { Scale = 0.93 }, logo)
+        local function later(delay, label, fn)
+            task.delay(delay, function() if alive and dim.Parent then protected(label, fn) end end)
+        end
+        tween(dim, { BackgroundTransparency = 0.55 }, 0.4)
+        tween(scale, { Scale = 1 }, 0.9)
+        for i = 1, 5 do
+            local letter = text(logo, ("NEXUS"):sub(i, i), UDim2.fromOffset((i - 1) * 60, 16),
+                UDim2.fromOffset(60, 66), 48, Theme.Text, true)
+            letter.TextXAlignment, letter.TextTransparency = Enum.TextXAlignment.Center, 1
+            later(0.1 + (i - 1) * 0.09, "intro-letter", function()
+                tween(letter, { TextTransparency = 0, Position = UDim2.fromOffset((i - 1) * 60, 0) }, 0.45)
+            end)
+        end
+        local rule = create("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 1, -10),
+            Size = UDim2.fromOffset(0, 1), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0 }, logo)
+        later(0.6, "intro-rule", function() tween(rule, { Size = UDim2.fromOffset(210, 1) }, 0.6) end)
+        later(1.8, "intro-fade", function()
+            tween(logo, { GroupTransparency = 1, Position = UDim2.fromScale(0.5, 0.46) }, 0.35)
+            tween(dim, { BackgroundTransparency = 1 }, 0.5)
+        end)
+        later(2.1, "intro-menu", function()
+            introActive = false
+            dim.Active = false
+            setMenu(true)
+        end)
+        later(2.4, "intro-cleanup", function()
+            dim:Destroy()
+            extras.ShowTelegram()
+        end)
+    end
+    connect(header.InputBegan, "drag-start", function(input)
+        if extras.TelegramOpen then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if activeTweens[panel] then activeTweens[panel]:Cancel() end
+            panel.GroupTransparency = 0
+            dragWindow = { input = input, pointer = Vector2.new(input.Position.X, input.Position.Y), start = panelPosition }
+        end
+    end)
+    connect(UserInputService.InputBegan, "input-began", function(input, processed)
+        if input.KeyCode == Enum.KeyCode.End and not UserInputService:GetFocusedTextBox() then
+            if extras.DisableAll then extras.DisableAll() end
+            return
+        end
+        if introActive then return end
+        if (input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert) and not UserInputService:GetFocusedTextBox() then
+            setMenu(not menuOpen)
+        elseif not extras.TelegramOpen and not processed and input.UserInputType == Enum.UserInputType.MouseButton2 then
+            rightMouseHeld = true
+        end
+    end)
+    connect(UserInputService.InputChanged, "input-changed", function(input)
+        local mouseMove = input.UserInputType == Enum.UserInputType.MouseMovement
+        if activeSlider and (input == activeSlider.input or (mouseMove and activeSlider.input.UserInputType == Enum.UserInputType.MouseButton1)) then
+            activeSlider.update(input.Position.X)
+        end
+        if dragWindow and (input == dragWindow.input or (mouseMove and dragWindow.input.UserInputType == Enum.UserInputType.MouseButton1)) then
+            panelPosition = dragWindow.start + Vector2.new(input.Position.X, input.Position.Y) - dragWindow.pointer
+            fitWindow()
+        end
+    end)
+    connect(UserInputService.InputEnded, "input-ended", function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton2 then rightMouseHeld = false end
+        if activeSlider and (input == activeSlider.input or input.UserInputType == Enum.UserInputType.MouseButton1) then activeSlider = nil end
+        if dragWindow and (input == dragWindow.input or input.UserInputType == Enum.UserInputType.MouseButton1) then dragWindow = nil end
+    end)
+    connect(UserInputService.WindowFocusReleased, "focus-lost", function()
+        windowFocused = false
+        rightMouseHeld, activeSlider, dragWindow = false, nil, nil
+    end)
+    connect(UserInputService.WindowFocused, "focus-gained", function() windowFocused = true end)
+
+    -- Watermark: одна выборка статистики в секунду, запрос названия плейса один раз.
+    do
+        local watermark = create("Frame", { Name = "Watermark", AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -18, 0, 18), Size = UDim2.fromOffset(590, 34),
+            BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.12,
+            BorderSizePixel = 0, ZIndex = 60, Visible = false, Active = false }, root)
+        corner(watermark, 7)
+        stroke(watermark).Transparency = 0.3
+        local brand = text(watermark, "NEXUS", UDim2.fromOffset(12, 0), UDim2.fromOffset(64, 34), 13, Theme.Accent, true)
+        local place = text(watermark, "Place " .. tostring(game.PlaceId), UDim2.fromOffset(90, 0), UDim2.fromOffset(225, 34), 11, Theme.Text)
+        place.Name = "WatermarkPlace"
+        local metrics = text(watermark, "— FPS  ·  — ms  ·  — players", UDim2.new(1, -12, 0, 0), UDim2.fromOffset(255, 34), 11, Theme.Muted)
+        metrics.Name, metrics.AnchorPoint, metrics.TextXAlignment = "WatermarkStats", Vector2.new(1, 0), Enum.TextXAlignment.Right
+        local elapsed, frames = 0, 0
+        extras.HideWatermark = function() watermark.Visible = false end
+        extras.WatermarkFrame = function(dt)
+            watermark.Visible = Settings.Watermark and not introActive
+            elapsed, frames = elapsed + math.max(dt, 0), frames + 1
+            if elapsed >= 1 then
+                local fps = math.floor(frames / math.max(elapsed, 0.001) + 0.5)
+                local ok, ping = pcall(function() return localPlayer:GetNetworkPing() end)
+                local pingText = "—"
+                if ok and type(ping) == "number" and ping == ping and ping >= 0 and ping < math.huge then
+                    pingText = tostring(math.floor(ping * 1000 + 0.5))
+                end
+                metrics.Text = string.format("%d FPS  ·  %s ms  ·  %d players", fps, pingText, #Players:GetPlayers())
+                elapsed, frames = 0, 0
+            end
+            local viewport = viewportSize()
+            local width = math.max(180, math.min(590, viewport.X - 36))
+            local compact = width < 520
+            watermark.Size = UDim2.fromOffset(width, compact and 54 or 34)
+            brand.Size = UDim2.fromOffset(64, compact and 28 or 34)
+            place.Size = UDim2.fromOffset(math.max(20, width - (compact and 104 or 365)), compact and 28 or 34)
+            metrics.AnchorPoint = compact and Vector2.new(0, 0) or Vector2.new(1, 0)
+            metrics.Position = compact and UDim2.fromOffset(12, 28) or UDim2.new(1, -12, 0, 0)
+            metrics.Size = compact and UDim2.fromOffset(width - 24, 22) or UDim2.fromOffset(255, 34)
+            metrics.TextXAlignment = compact and Enum.TextXAlignment.Left or Enum.TextXAlignment.Right
+        end
+        task.spawn(function()
+            local ok, info = pcall(function() return MarketplaceService:GetProductInfoAsync(game.PlaceId, Enum.InfoType.Asset) end)
+            if alive and ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+                protected("place-name", function() place.Text = info.Name:gsub("[\r\n]", " ") end)
+            end
+        end)
+    end
+
+    -- Локальная погода: ограниченный пул независимых деталей, без текстур/HTTP.
+    -- Эффекты не меняют физику карты и исключены из лучей прицеливания.
+    do
+        local folder, grading, currentMode
+        local particles, bolts = {}, {}
+        local roofTimer, sheltered, flash, nextFlash = 0, false, 0, 8
+        local roofParams = RaycastParams.new()
+        roofParams.FilterType = Enum.RaycastFilterType.Exclude
+        roofParams.IgnoreWater = true
+        local function randomRange(low, high) return low + math.random() * (high - low) end
+        local function particlePart(name, size, color, material)
+            return create("Part", {
+                Name = name, Size = size, Color = color, Material = material,
+                Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+                CastShadow = false, Transparency = 1,
+            }, folder)
+        end
+        local function respawn(particle, center, spread)
+            particle.position = center + Vector3.new(randomRange(-28, 28), randomRange(spread and -12 or 14, 26), randomRange(-28, 28))
+            particle.phase = randomRange(0, math.pi * 2)
+        end
+        stopWeather = function()
+            if folder then folder:Destroy(); folder = nil end
+            if grading then grading:Destroy(); grading = nil end
+            table.clear(particles)
+            table.clear(bolts)
+            currentMode, roofTimer, sheltered, flash, nextFlash = nil, 0, false, 0, randomRange(7, 12)
+        end
+        extras.WeatherFrame = function(camera, dt)
+            if not Settings.Weather or introActive then
+                if folder or grading then stopWeather() end
+                return
+            end
+            local mode = Settings.WeatherMode
+            local snowy, storm = mode == "Snow" or mode == "Blizzard", mode == "Storm"
+            local center = camera.CFrame.Position
+            dt = math.clamp(dt, 0, 0.1)
+            if not folder or currentMode ~= mode then
+                stopWeather()
+                folder = create("Folder", { Name = "NexusWeather" }, worldFolder)
+                currentMode = mode
+                grading = create("ColorCorrectionEffect", {
+                    Name = "NexusWeatherGrade", Enabled = true, Brightness = 0,
+                    Contrast = 0, Saturation = 0, TintColor = Color3.fromRGB(255, 255, 255),
+                }, Lighting)
+            end
+            -- Пул ограничен 180 объектами осадков, без создания объектов каждый кадр.
+            local count = math.clamp(math.floor(40 + Settings.WeatherIntensity * 1.4), 40, 180)
+            while #particles > count do particles[#particles].part:Destroy(); table.remove(particles) end
+            while #particles < count do
+                local size = snowy and randomRange(0.09, 0.19) or randomRange(1.1, 2.1)
+                local part = particlePart(snowy and "Snowflake" or "Raindrop",
+                    snowy and Vector3.new(size, size, size) or Vector3.new(0.035, size, 0.035),
+                    snowy and Color3.fromRGB(233, 236, 242) or Color3.fromRGB(173, 185, 201), Enum.Material.SmoothPlastic)
+                if snowy then part.Shape = Enum.PartType.Ball end
+                local particle = { part = part, speed = snowy and randomRange(5, 10) or randomRange(48, 68) }
+                respawn(particle, center, true)
+                table.insert(particles, particle)
+            end
+            roofTimer = roofTimer - dt
+            if not Settings.WeatherRoofCheck then
+                sheltered = false
+            elseif roofTimer <= 0 then
+                roofTimer = 0.3
+                local ignored = { worldFolder, camera }
+                if localPlayer.Character then table.insert(ignored, localPlayer.Character) end
+                roofParams.FilterDescendantsInstances = ignored
+                sheltered = workspace:Raycast(center, Vector3.new(0, 90, 0), roofParams) ~= nil
+            end
+            local wind = Settings.WeatherWind + (mode == "Blizzard" and 16 or 0)
+            for _, particle in ipairs(particles) do
+                particle.phase = particle.phase + dt * 1.7
+                local drift = snowy and math.sin(particle.phase) * 1.8 or 0
+                particle.position = particle.position + Vector3.new(wind + drift, -particle.speed, drift * 0.5) * dt
+                local relative = particle.position - center
+                if relative.Y < -18 or relative.Y > 34 or math.abs(relative.X) > 36 or math.abs(relative.Z) > 36 then
+                    respawn(particle, center, false)
+                end
+                particle.part.CFrame = CFrame.new(particle.position)
+                particle.part.Transparency = sheltered and 1 or snowy and 0.12 or 0.35
+            end
+            -- Редкие короткие вспышки и отдельный зигзаг молнии; исходный Lighting не меняется.
+            flash = math.max(0, flash - dt)
+            nextFlash = nextFlash - dt
+            if storm and Settings.WeatherLightning and not sheltered and nextFlash <= 0 then
+                nextFlash, flash = randomRange(7, 13), 0.24
+                local forward = camera.CFrame.LookVector
+                local base = center + Vector3.new(forward.X * 55, 0, forward.Z * 55)
+                local previousPoint = base + Vector3.new(randomRange(-14, 14), 42, 0)
+                for i = 1, 4 do
+                    local point = base + Vector3.new(randomRange(-8, 8), 42 - i * 10, randomRange(-3, 3))
+                    local bolt = bolts[i]
+                    if not bolt then
+                        bolt = particlePart("Lightning", Vector3.new(0.15, 0.15, 1), Color3.fromRGB(221, 225, 240), Enum.Material.Neon)
+                        bolts[i] = bolt
+                    end
+                    bolt.Size = Vector3.new(0.15, 0.15, (point - previousPoint).Magnitude)
+                    bolt.CFrame = CFrame.lookAt((previousPoint + point) / 2, point)
+                    previousPoint = point
+                end
+            end
+            local flashing = storm and Settings.WeatherLightning and flash > 0 and not sheltered
+            for _, bolt in ipairs(bolts) do bolt.Transparency = flashing and 0.05 or 1 end
+            grading.Brightness = (storm and -0.045 or mode == "Blizzard" and -0.02 or 0) + (flashing and 0.18 * flash / 0.24 or 0)
+            grading.Saturation = storm and -0.22 or mode == "Blizzard" and -0.12 or 0
+        end
+    end
+
+    -- Данные игрока читаются заново: после смерти старые ссылки не используются.
+    local function enemyData(player, teamCheck)
+        if player == localPlayer or player.Parent ~= Players then return nil end
+        if teamCheck == nil then teamCheck = Settings.TeamCheck end
+        if teamCheck and localPlayer.Team ~= nil and not localPlayer.Neutral and not player.Neutral and localPlayer.Team == player.Team then return nil end
+        local character = player.Character
+        if not character or not character.Parent then return nil end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or humanoid.Health <= 0 or not rootPart or not rootPart:IsA("BasePart") then return nil end
+        return character, humanoid, rootPart
+    end
+
+    -- Proxy имеет отдельную assembly: ни одного Weld/Motor6D/Constraint.
+    -- Anchored устанавливается только НОВОМУ proxy, никогда исходному телу.
+    -- Некоторые клиентские raycast-оружия распознают его по родителю Character;
+    -- для серверной регистрации попаданий универсального контракта нет.
+    local hitboxProxies, proxyEpoch = {}, 0
+    local function removeProxy(player)
+        local entry = hitboxProxies[player]
+        if entry then
+            hitboxProxies[player] = nil
+            entry.part:Destroy()
+        end
+    end
+    restoreHitboxes = function()
+        for player in pairs(hitboxProxies) do protected("proxy-remove", removeProxy, player) end
+    end
+    updateHitboxes = function()
+        if not Settings.Hitbox then restoreHitboxes(); return end
+        proxyEpoch = proxyEpoch + 1
+        for _, player in ipairs(Players:GetPlayers()) do
+            protected("proxy-player", function()
+                local character, _, rootPart = enemyData(player)
+                if not character then return end
+                local entry = hitboxProxies[player]
+                if entry and (entry.character ~= character or not entry.part.Parent) then removeProxy(player); entry = nil end
+                if not entry then
+                    local proxy = Instance.new("Part")
+                    entry = { part = proxy, character = character }
+                    hitboxProxies[player] = entry
+                    proxy.Name = "NexusHitProxy"
+                    proxy.Anchored, proxy.CanCollide, proxy.CanTouch = true, false, false
+                    proxy.CanQuery, proxy.CastShadow = true, false
+                    proxy.Transparency = 1
+                    proxy.Material = Enum.Material.ForceField
+                    proxy.CFrame = rootPart.CFrame
+                    proxy.Parent = character
+                end
+                entry.epoch = proxyEpoch
+                local size = Settings.HitboxSize
+                entry.part.Size = Vector3.new(size, size, size)
+                entry.part.CFrame = rootPart.CFrame
+                entry.part.Color = Settings.BoxColor
+                entry.part.Transparency = Settings.HitboxVisible and 0.85 or 1
+            end)
+        end
+        for player, entry in pairs(hitboxProxies) do
+            if entry.epoch ~= proxyEpoch then protected("proxy-retire", removeProxy, player) end
+        end
+    end
+    local function isProxy(part)
+        for _, entry in pairs(hitboxProxies) do if part == entry.part then return true end end
+        return false
+    end
+    local function rayIgnore(character, camera, excludeProxies)
+        local ignored = { character, camera, worldFolder }
+        if excludeProxies then
+            for _, entry in pairs(hitboxProxies) do table.insert(ignored, entry.part) end
+        end
+        return ignored
+    end
+
+    -- Chams меняют только визуальное представление. Копии не участвуют
+    -- ни в столкновениях, ни в raycast, не содержат скриптов или соединений.
+    local chamsRecords, chamsEpoch = {}, 0
+    local function restoreChamsPart(original, entry)
+        if original.Parent and original.LocalTransparencyModifier == 1 then
+            original.LocalTransparencyModifier = entry.transparency
+        end
+        entry.copy:Destroy()
+    end
+    local function removeChams(player)
+        local record = chamsRecords[player]
+        if not record then return end
+        chamsRecords[player] = nil
+        for original, entry in pairs(record.parts) do protected("chams-part-restore", restoreChamsPart, original, entry) end
+        record.model:Destroy()
+    end
+    restoreChams = function()
+        for player in pairs(chamsRecords) do protected("chams-remove", removeChams, player) end
+    end
+    local function addChamsPart(record, original)
+        local copy = original:Clone()
+        if not copy then return end -- Archivable=false: оставляем оригинал видимым.
+        record.parts[original] = { copy = copy, transparency = original.LocalTransparencyModifier }
+        -- Сохраняем только геометрию SpecialMesh; Script/LocalScript, joints,
+        -- SurfaceAppearance и текстуры не должны попасть в живую копию.
+        local mesh = copy:FindFirstChildOfClass("SpecialMesh")
+        if mesh then mesh.Parent = nil; mesh:ClearAllChildren(); mesh.TextureId = "" end
+        copy:ClearAllChildren()
+        if mesh then mesh.Parent = copy end
+        if copy:IsA("MeshPart") then copy.TextureID = "" end
+        copy.Anchored, copy.CanCollide, copy.CanTouch, copy.CanQuery = true, false, false, false
+        copy.CastShadow = false
+        copy.MaterialVariant = ""
+        copy.CFrame = original.CFrame
+        copy.Transparency = 1 - Settings.ChamsOpacity / 100
+        copy.Color, copy.Material = Settings.ChamsColor, Enum.Material[Settings.ChamsMaterial]
+        copy.LocalTransparencyModifier = 0
+        copy.Parent = record.model
+        original.LocalTransparencyModifier = 1
+    end
+    updateChams = function()
+        if not Settings.Chams then restoreChams(); return end
+        chamsEpoch = chamsEpoch + 1
+        local now, camera = os.clock(), workspace.CurrentCamera
+        for _, player in ipairs(Players:GetPlayers()) do
+            local ok = protected("chams-player", function()
+                local character, _, rootPart = enemyData(player, not Settings.ESPTeammates)
+                if not character or not camera or (camera.CFrame.Position - rootPart.Position).Magnitude > Settings.MaxDistance then return end
+                local record = chamsRecords[player]
+                if record and record.character ~= character then removeChams(player); record = nil end
+                if not record then
+                    local model = create("Model", { Name = "NexusChams_" .. tostring(player.UserId) }, worldFolder)
+                    record = { model = model, character = character, parts = {}, nextScan = 0 }
+                    chamsRecords[player] = record
+                    record.highlight = create("Highlight", { Adornee = model, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, model)
+                end
+                record.epoch = chamsEpoch
+                if now >= record.nextScan then
+                    record.nextScan = now + 0.5
+                    for _, original in ipairs(character:GetChildren()) do
+                        if original:IsA("BasePart") and original.Name ~= "HumanoidRootPart" and not isProxy(original) and not record.parts[original] then
+                            addChamsPart(record, original)
+                        end
+                    end
+                end
+                for original, entry in pairs(record.parts) do
+                    if original.Parent ~= character then
+                        protected("chams-stale-part", restoreChamsPart, original, entry)
+                        record.parts[original] = nil
+                    else
+                        entry.copy.CFrame, entry.copy.Size = original.CFrame, original.Size
+                        entry.copy.Color, entry.copy.Material = Settings.ChamsColor, Enum.Material[Settings.ChamsMaterial]
+                        entry.copy.Transparency = 1 - Settings.ChamsOpacity / 100
+                    end
+                end
+                record.highlight.Enabled = true
+                record.highlight.FillColor, record.highlight.OutlineColor = Settings.ChamsColor, Settings.ChamsColor
+                record.highlight.FillTransparency = math.clamp(1 - Settings.ChamsOpacity / 100 + 0.1, 0, 1)
+                record.highlight.OutlineTransparency = Settings.ChamsOutline and 0.1 or 1
+            end)
+            if not ok then protected("chams-failure-cleanup", removeChams, player) end
+        end
+        for player, record in pairs(chamsRecords) do
+            if record.epoch ~= chamsEpoch then protected("chams-retire", removeChams, player) end
+        end
+    end
+    connect(Players.PlayerRemoving, "effects-player-removing", function(player)
+        protected("proxy-player-remove", removeProxy, player)
+        protected("chams-player-remove", removeChams, player)
+    end)
+
+    -- Freecam не привязан к персонажу и не меняет его положение.
+    -- ContextActionService временно забирает клавиши движения у стандартных контролов.
+    local freecam, freecamAction = nil, renderName .. "_FreecamInput"
+    local freecamKeys = {
+        Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
+        Enum.KeyCode.Space, Enum.KeyCode.LeftControl, Enum.KeyCode.LeftShift,
+    }
+    local function releaseCameraState()
+        if not freecam then return end
+        local saved = freecam
+        freecam = nil
+        protected("freecam-mouse-restore", function()
+            if saved.locked and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCurrentPosition then
+                UserInputService.MouseBehavior = saved.mouse
+            end
+        end)
+        protected("freecam-camera-restore", function()
+            local camera = saved.camera
+            if camera and camera.Parent then
+                camera.CFrame, camera.Focus = saved.frame, saved.focus
+                local subject = saved.subject
+                if not subject or not subject.Parent then
+                    subject = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+                end
+                if subject then camera.CameraSubject = subject end
+                camera.CameraType = saved.kind
+            end
+        end)
+    end
+    stopFreecam = function()
+        protected("freecam-unbind", function() ContextActionService:UnbindAction(freecamAction) end)
+        releaseCameraState()
+    end
+    local function captureFreecam(camera)
+        local pitch, yaw = camera.CFrame:ToOrientation()
+        freecam = {
+            camera = camera, frame = camera.CFrame, focus = camera.Focus,
+            kind = camera.CameraType, subject = camera.CameraSubject,
+            mouse = UserInputService.MouseBehavior, position = camera.CFrame.Position,
+            pitch = pitch, yaw = yaw, velocity = Vector3.new(), locked = false,
+        }
+        camera.CameraType = Enum.CameraType.Scriptable
+    end
+    setFreecam = function(enabled)
+        if not enabled then stopFreecam(); return end
+        if freecam then return end
+        local camera = workspace.CurrentCamera
+        assert(camera, "Камера отсутствует")
+        captureFreecam(camera)
+        ContextActionService:BindActionAtPriority(freecamAction, function()
+            local ok, result = protected("freecam-input", function()
+                if not alive or not Settings.Freecam or UserInputService:GetFocusedTextBox() then
+                    return Enum.ContextActionResult.Pass
+                end
+                return Enum.ContextActionResult.Sink
+            end)
+            return ok and result or Enum.ContextActionResult.Pass
+        end, false, Enum.ContextActionPriority.High.Value + 100, table.unpack(freecamKeys))
+    end
+    local function freecamFrame(camera, dt)
+        if not Settings.Freecam then return end
+        if not freecam then setFreecam(true) end
+        if freecam.camera ~= camera then
+            releaseCameraState()
+            captureFreecam(camera)
+        end
+        local state = freecam
+        local canMove = windowFocused and not menuOpen and not UserInputService:GetFocusedTextBox() and not GuiService.MenuIsOpen
+        local look = canMove and rightMouseHeld
+        if look then
+            if not state.locked then
+                state.mouse = UserInputService.MouseBehavior
+                state.locked = true
+            end
+            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+            local delta = UserInputService:GetMouseDelta()
+            state.yaw = state.yaw - delta.X * 0.0028
+            state.pitch = math.clamp(state.pitch - delta.Y * 0.0028, math.rad(-89), math.rad(89))
+        elseif state.locked then
+            if UserInputService.MouseBehavior == Enum.MouseBehavior.LockCurrentPosition then UserInputService.MouseBehavior = state.mouse end
+            state.locked = false
+        end
+        local function down(key) return canMove and UserInputService:IsKeyDown(key) and 1 or 0 end
+        local movement = Vector3.new(down(Enum.KeyCode.D) - down(Enum.KeyCode.A),
+            down(Enum.KeyCode.Space) - down(Enum.KeyCode.LeftControl), down(Enum.KeyCode.S) - down(Enum.KeyCode.W))
+        if movement.Magnitude > 1 then movement = movement.Unit end
+        local rotation = CFrame.fromOrientation(state.pitch, state.yaw, 0)
+        local speed = Settings.FreecamSpeed * (down(Enum.KeyCode.LeftShift) == 1 and 3 or 1)
+        local desired = rotation:VectorToWorldSpace(movement) * speed
+        local alpha = 1 - math.exp(-14 * math.min(dt, 0.1))
+        state.velocity = canMove and state.velocity:Lerp(desired, alpha) or Vector3.new()
+        state.position = state.position + state.velocity * math.min(dt, 0.1)
+        camera.CameraType = Enum.CameraType.Scriptable
+        camera.CFrame = CFrame.new(state.position) * rotation
+        camera.Focus = camera.CFrame * CFrame.new(0, 0, -32)
+    end
+
+    -- Noclip меняет только CanCollide своего персонажа до шага физики.
+    -- Fly использует современные constraints; Anchored и размер тела не меняются.
+    do
+        local collisionOriginals, collisionCharacter = {}, nil
+        local flight
+        extras.StopNoclip = function()
+            for part, original in pairs(collisionOriginals) do
+                protected("noclip-restore", function()
+                    if part.Parent and part.CanCollide == false then part.CanCollide = original end
+                end)
+            end
+            table.clear(collisionOriginals)
+            collisionCharacter = nil
+        end
+        extras.StopFly = function()
+            local saved = flight
+            flight = nil
+            if not saved then return end
+            for _, object in ipairs(saved.objects) do pcall(function() object:Destroy() end) end
+            protected("fly-humanoid-restore", function()
+                local humanoid = saved.humanoid
+                if humanoid.Parent then
+                    if humanoid.AutoRotate == false then humanoid.AutoRotate = saved.autoRotate end
+                    if humanoid.PlatformStand == true then
+                        humanoid.PlatformStand = saved.platformStand
+                        if not saved.platformStand and humanoid.Health > 0 then humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end
+                    end
+                end
+            end)
+            protected("fly-velocity-stop", function()
+                if saved.root.Parent and not saved.root.Anchored then
+                    saved.root.AssemblyLinearVelocity = Vector3.new()
+                    saved.root.AssemblyAngularVelocity = Vector3.new()
+                end
+            end)
+        end
+        stopMotion = function()
+            pcall(extras.StopFly)
+            pcall(extras.StopNoclip)
+        end
+        local function noclipStep()
+            local character = localPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if not Settings.Noclip or not character or not character.Parent or not humanoid or humanoid.Health <= 0 then
+                extras.StopNoclip()
+                return
+            end
+            if collisionCharacter ~= character then extras.StopNoclip(); collisionCharacter = character end
+            for part, original in pairs(collisionOriginals) do
+                if not part:IsDescendantOf(character) then
+                    if part.Parent and part.CanCollide == false then part.CanCollide = original end
+                    collisionOriginals[part] = nil
+                end
+            end
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if collisionOriginals[part] == nil then collisionOriginals[part] = part.CanCollide end
+                    part.CanCollide = false
+                end
+            end
+        end
+        local function flyStep(dt)
+            local character, camera = localPlayer.Character, workspace.CurrentCamera
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local body = character and character:FindFirstChild("HumanoidRootPart")
+            if not Settings.Fly or Settings.Freecam or introActive or not camera or not character or not character.Parent
+                or not humanoid or humanoid.Health <= 0 or humanoid.Sit or not body or not body:IsA("BasePart") or body.Anchored then
+                extras.StopFly()
+                return
+            end
+            if flight and (flight.root ~= body or flight.humanoid ~= humanoid or not flight.velocity.Parent
+                or not flight.orientation.Parent or not flight.attachment.Parent) then extras.StopFly() end
+            if not flight then
+                flight = { root = body, humanoid = humanoid, autoRotate = humanoid.AutoRotate,
+                    platformStand = humanoid.PlatformStand, objects = {}, desired = Vector3.new() }
+                -- Регистрируем каждый объект до установки свойств для очистки частичной сборки.
+                local function add(className, properties)
+                    local object = Instance.new(className)
+                    table.insert(flight.objects, object)
+                    for key, value in pairs(properties) do object[key] = value end
+                    object.Parent = body
+                    return object
+                end
+                flight.attachment = add("Attachment", { Name = "NexusFlyAttachment" })
+                flight.velocity = add("LinearVelocity", { Name = "NexusFlyVelocity", Attachment0 = flight.attachment,
+                    RelativeTo = Enum.ActuatorRelativeTo.World, VelocityConstraintMode = Enum.VelocityConstraintMode.Vector,
+                    ForceLimitsEnabled = false, VectorVelocity = Vector3.new() })
+                flight.orientation = add("AlignOrientation", { Name = "NexusFlyOrientation", Attachment0 = flight.attachment,
+                    Mode = Enum.OrientationAlignmentMode.OneAttachment, MaxTorque = 10000000,
+                    Responsiveness = 18, MaxAngularVelocity = 100, RigidityEnabled = false })
+            end
+            humanoid.PlatformStand, humanoid.AutoRotate = true, false
+            local canMove = windowFocused and not menuOpen and not GuiService.MenuIsOpen and not UserInputService:GetFocusedTextBox()
+            local function down(key) return canMove and UserInputService:IsKeyDown(key) and 1 or 0 end
+            local localDirection = Vector3.new(down(Enum.KeyCode.D) - down(Enum.KeyCode.A), 0,
+                down(Enum.KeyCode.S) - down(Enum.KeyCode.W))
+            local direction = camera.CFrame:VectorToWorldSpace(localDirection)
+                + Vector3.new(0, down(Enum.KeyCode.Space) - down(Enum.KeyCode.LeftControl), 0)
+            if direction.Magnitude > 1 then direction = direction.Unit end
+            local speed = Settings.FlySpeed * (down(Enum.KeyCode.LeftShift) == 1 and 2 or 1)
+            flight.desired = canMove and flight.desired:Lerp(direction * speed, 1 - math.exp(-16 * math.clamp(dt, 0, 0.1))) or Vector3.new()
+            flight.velocity.VectorVelocity = flight.desired
+            local forward = camera.CFrame.LookVector
+            local flat = Vector3.new(forward.X, 0, forward.Z)
+            if flat.Magnitude > 0.001 then flight.orientation.CFrame = CFrame.lookAt(Vector3.new(), flat.Unit) end
+        end
+        connect(RunService.PreSimulation, "motion-physics", function(dt)
+            if not protected("noclip", noclipStep) then
+                Settings.Noclip = false
+                extras.StopNoclip()
+                toggleRefreshers.Noclip(true)
+                notify("Noclip выключен после ошибки.")
+            end
+            if not protected("fly", flyStep, dt) then
+                Settings.Fly = false
+                extras.StopFly()
+                toggleRefreshers.Fly(true)
+                notify("Fly выключен после ошибки.")
+            end
+        end)
+    end
+
+    connect(RunService.Heartbeat, "movement-heartbeat", function()
+        local character = localPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return end
+        if Settings.Freecam then
+            humanoid:Move(Vector3.new(), false)
+        elseif Settings.Bhop and not Settings.Fly and windowFocused and not menuOpen and not GuiService.MenuIsOpen and not UserInputService:GetFocusedTextBox() then
+            if humanoid.MoveDirection.Magnitude > 0.05 and humanoid.FloorMaterial ~= Enum.Material.Air
+                and not humanoid.Sit and not humanoid.PlatformStand then
+                local state = humanoid:GetState()
+                if state ~= Enum.HumanoidStateType.Swimming and state ~= Enum.HumanoidStateType.Climbing then humanoid.Jump = true end
+            end
+        end
+    end)
+
+    local function makeLine(parent, color, thickness)
+        return create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = color,
+            Size = UDim2.fromOffset(1, thickness or 1), BorderSizePixel = 0, Visible = false }, parent)
+    end
+    local function drawLine(line, from, to, thickness)
+        local delta = to - from
+        local length = delta.Magnitude
+        line.Visible = length > 0.5
+        if length <= 0.5 then return end
+        line.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
+        line.Size = UDim2.fromOffset(length, thickness or 1)
+        line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+    end
+    local crosshair = create("Frame", { Name = "Crosshair", Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1, Visible = false, ZIndex = 3 }, overlay)
+    local crosshairLines = {}
+    for i = 1, 4 do crosshairLines[i] = makeLine(crosshair, Theme.Text, 2) end
+    local crosshairDirections = { Vector2.new(1, 0), Vector2.new(-1, 0), Vector2.new(0, 1), Vector2.new(0, -1) }
+    local function drawCrosshair(camera)
+        crosshair.Visible = Settings.Crosshair and not Settings.Freecam
+        if not crosshair.Visible then return end
+        local center, gap, length = camera.ViewportSize / 2, Settings.CrosshairGap, Settings.CrosshairSize
+        for i, direction in ipairs(crosshairDirections) do
+            drawLine(crosshairLines[i], center + direction * gap, center + direction * (gap + length), Settings.CrosshairThickness)
+        end
+    end
+    local bonePairs = {
+        -- R15; отсутствующие пары пропускаются.
+        {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+        {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"},
+        {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"},
+        {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"},
+        {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"},
+        -- R6.
+        {"Head", "Torso"}, {"Torso", "Left Arm"}, {"Torso", "Right Arm"},
+        {"Torso", "Left Leg"}, {"Torso", "Right Leg"},
+    }
+    local function makeRecord(player)
+        local group = create("Frame", { Name = tostring(player.UserId), Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1, Visible = false }, overlay)
+        -- Сразу регистрируем запись: если дальнейшая сборка прервётся, она удалится.
+        local record = { group = group, bones = {}, parts = {}, pose = {}, nextRefresh = 0, nextLabel = 0 }
+        records[player] = record
+        record.body = create("Frame", { Name = "Onscreen", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, group)
+        record.arrowA, record.arrowB = makeLine(group, Theme.Accent, 2), makeLine(group, Theme.Accent, 2)
+        record.arrowA.Name, record.arrowB.Name = "ArrowA", "ArrowB"
+        record.arrowText = text(group, "", UDim2.new(), UDim2.fromOffset(90, 17), 10, Theme.Text)
+        record.arrowText.AnchorPoint, record.arrowText.TextXAlignment = Vector2.new(0.5, 0.5), Enum.TextXAlignment.Center
+        record.arrowText.TextStrokeTransparency = 0.4
+        record.box = create("Frame", { Name = "Box", BackgroundTransparency = 1, Visible = false }, record.body)
+        record.boxStroke = stroke(record.box, Settings.BoxColor, 1)
+        record.name = text(record.body, "", UDim2.new(), UDim2.fromOffset(260, 18), 12, Theme.Text, true)
+        record.name.AnchorPoint, record.name.TextXAlignment = Vector2.new(0.5, 1), Enum.TextXAlignment.Center
+        record.name.TextStrokeTransparency = 0.35
+        record.hpText = text(record.body, "", UDim2.new(), UDim2.fromOffset(230, 17), 11, Theme.Green)
+        record.hpText.AnchorPoint, record.hpText.TextXAlignment = Vector2.new(0.5, 0), Enum.TextXAlignment.Center
+        record.hpText.TextStrokeTransparency = 0.35
+        record.hpBack = create("Frame", { BackgroundColor3 = Theme.Background, BorderSizePixel = 0 }, record.body)
+        record.hpFill = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
+            BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1) }, record.hpBack)
+        record.tracer = makeLine(record.body, Theme.Accent, 1)
+        for i = 1, #bonePairs do record.bones[i] = makeLine(record.body, Theme.Text, 1) end
+        return record
+    end
+    local function removeRecord(player)
+        local record = records[player]
+        if not record then return end
+        records[player] = nil
+        if record.group then record.group:Destroy() end
+        if record.highlight then record.highlight:Destroy() end
+    end
+    connect(Players.PlayerRemoving, "player-removing", removeRecord)
+    local function hideRecord(record)
+        record.group.Visible = false
+        if record.highlight then record.highlight.Enabled = false end
+        if record.rootWorld then
+            record.rootWorld, record.hp = nil, nil
+            record.pose = {}
+        end
+    end
+
+    -- Bounding box вычисляется по восьми углам частей тела без аксессуаров.
+    -- При пересечении ближней плоскости рамка скрывается, чтобы не растягивать её.
+    local cornerSigns = {
+        Vector3.new(-1,-1,-1), Vector3.new(-1,-1,1), Vector3.new(-1,1,-1), Vector3.new(-1,1,1),
+        Vector3.new(1,-1,-1), Vector3.new(1,-1,1), Vector3.new(1,1,-1), Vector3.new(1,1,1),
+    }
+    local function bounds(record, camera)
+        local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+        local count = 0
+        for _, part in ipairs(record.parts) do
+            if part.Parent == record.character then
+                local half = part.Size * 0.5
+                for _, sign in ipairs(cornerSigns) do
+                    local world = (record.pose[part] or part.CFrame):PointToWorldSpace(Vector3.new(half.X * sign.X, half.Y * sign.Y, half.Z * sign.Z))
+                    local projected = camera:WorldToViewportPoint(world)
+                    if projected.Z <= 0.1 then return nil end
+                    minX, minY = math.min(minX, projected.X), math.min(minY, projected.Y)
+                    maxX, maxY = math.max(maxX, projected.X), math.max(maxY, projected.Y)
+                    count = count + 1
+                end
+            end
+        end
+        local viewport = camera.ViewportSize
+        if count == 0 or maxX < 0 or minX > viewport.X or maxY < 0 or minY > viewport.Y then return nil end
+        return minX, minY, maxX, maxY
+    end
+
+    local function updateArrow(record, camera, distance)
+        local relative = camera.CFrame:PointToObjectSpace(record.rootWorld)
+        local direction = Vector2.new(relative.X, -relative.Y)
+        -- Для цели точно за спиной выбираем низ экрана вместо деления на ноль.
+        if direction.Magnitude < 0.001 then direction = Vector2.new(0, 1) end
+        direction = direction.Unit
+        local center = camera.ViewportSize / 2
+        local half = Vector2.new(math.max(10, center.X - 38), math.max(10, center.Y - 48))
+        local radius = math.min(half.X / math.max(math.abs(direction.X), 0.0001), half.Y / math.max(math.abs(direction.Y), 0.0001))
+        local tip = center + direction * radius
+        local base = tip - direction * 12
+        local sideways = Vector2.new(-direction.Y, direction.X) * 6
+        drawLine(record.arrowA, base + sideways, tip, 2)
+        drawLine(record.arrowB, base - sideways, tip, 2)
+        local labelPoint = tip - direction * 29
+        record.arrowText.Position = UDim2.fromOffset(labelPoint.X, labelPoint.Y)
+        record.arrowText.Visible = Settings.Distance
+        record.arrowText.Text = tostring(math.floor(distance + 0.5))
+    end
+    local function updateRecord(player, record, camera, dt, now)
+        local character, humanoid, rootPart = enemyData(player, not Settings.ESPTeammates)
+        if not Settings.ESP or not character or (camera.CFrame.Position - rootPart.Position).Magnitude > Settings.MaxDistance then
+            hideRecord(record)
+            return
+        end
+        record.boxStroke.Color = Settings.BoxColor
+        record.tracer.BackgroundColor3 = Settings.BoxColor
+        record.arrowA.BackgroundColor3, record.arrowB.BackgroundColor3 = Settings.BoxColor, Settings.BoxColor
+        record.name.TextColor3, record.arrowText.TextColor3 = Settings.TextColor, Settings.TextColor
+        if record.character ~= character or now >= record.nextRefresh then
+            if record.character ~= character then
+                record.pose, record.rootWorld, record.hp = {}, nil, nil
+                record.nextLabel = 0
+            end
+            record.character, record.parts = character, {}
+            record.nextRefresh = now + 1
+            for _, child in ipairs(character:GetChildren()) do
+                if child:IsA("BasePart") and child.Name ~= "HumanoidRootPart" and not isProxy(child) then table.insert(record.parts, child) end
+            end
+            for part in pairs(record.pose) do if part.Parent ~= character then record.pose[part] = nil end end
+        end
+        local alpha = 1 - math.exp(-Settings.ESPSmoothing * math.min(dt, 0.1))
+        local teleported = record.rootWorld and (record.rootWorld - rootPart.Position).Magnitude > 30
+        if not record.rootWorld or teleported then
+            record.rootWorld, record.pose = rootPart.Position, {}
+        else
+            record.rootWorld = record.rootWorld:Lerp(rootPart.Position, alpha)
+        end
+        local rootScreen, rootVisible = camera:WorldToViewportPoint(record.rootWorld)
+        local distance = (camera.CFrame.Position - record.rootWorld).Magnitude
+        record.arrowA.Visible, record.arrowB.Visible, record.arrowText.Visible = false, false, false
+        record.group.Visible = true
+        if not rootVisible or rootScreen.Z <= 0.1 then
+            record.body.Visible, record.wasOnscreen = false, false
+            if Settings.Arrows then updateArrow(record, camera, distance) end
+            return
+        end
+        -- Сглаживание в мировом пространстве. Затем проекция текущей камерой:
+        -- повороты камеры не тянут за собой старые экранные координаты рамок.
+        for _, part in ipairs(record.parts) do
+            if part.Parent == character then
+                local old = record.wasOnscreen and record.pose[part]
+                record.pose[part] = old and old:Lerp(part.CFrame, alpha) or part.CFrame
+            end
+        end
+        record.wasOnscreen = true
+        local x1, y1, x2, y2 = bounds(record, camera)
+        record.body.Visible = x1 ~= nil
+        if not x1 then return end
+        local width, height, centerX = x2 - x1, y2 - y1, (x1 + x2) / 2
+        record.box.Visible = Settings.Boxes
+        record.box.Position, record.box.Size = UDim2.fromOffset(x1, y1), UDim2.fromOffset(width, height)
+        record.name.Visible = Settings.Names
+        record.name.Position = UDim2.fromOffset(centerX, y1 - 3)
+        local hp = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+        record.hp = record.hp and record.hp + (hp - record.hp) * alpha or hp
+        local hpColor = Settings.HealthColor
+        record.hpBack.Visible, record.hpText.Visible = Settings.Health, Settings.Health or Settings.Distance
+        record.hpBack.Position, record.hpBack.Size = UDim2.fromOffset(x1 - 6, y1), UDim2.fromOffset(3, height)
+        record.hpFill.Size, record.hpFill.BackgroundColor3 = UDim2.fromScale(1, record.hp), hpColor
+        record.hpText.Position, record.hpText.TextColor3 = UDim2.fromOffset(centerX, y2 + 3), Settings.TextColor
+        if now >= record.nextLabel then
+            record.nextLabel = now + 0.1
+            record.name.Text = player.DisplayName == player.Name and player.Name or (player.DisplayName .. " @" .. player.Name)
+            local label = Settings.Health and (tostring(math.ceil(humanoid.Health)) .. " / " .. tostring(math.ceil(humanoid.MaxHealth)) .. " HP") or ""
+            if Settings.Distance then label = label .. (Settings.Health and "  ·  " or "") .. tostring(math.floor(distance + 0.5)) .. " studs" end
+            record.hpText.Text = label
+        end
+        record.tracer.Visible = false
+        if Settings.Tracers then
+            local point, visible = camera:WorldToViewportPoint(record.rootWorld)
+            if visible and point.Z > 0 then drawLine(record.tracer, camera.ViewportSize / 2, Vector2.new(point.X, point.Y), 1) end
+        end
+        for index, pair in ipairs(bonePairs) do
+            local line = record.bones[index]
+            line.BackgroundColor3 = Settings.BoneColor
+            line.Visible = false
+            if Settings.Bones then
+                local a, b = character:FindFirstChild(pair[1]), character:FindFirstChild(pair[2])
+                if a and b and a:IsA("BasePart") and b:IsA("BasePart") then
+                    local from, fromVisible = camera:WorldToViewportPoint((record.pose[a] or a.CFrame).Position)
+                    local to, toVisible = camera:WorldToViewportPoint((record.pose[b] or b.CFrame).Position)
+                    if fromVisible and toVisible and from.Z > 0.1 and to.Z > 0.1 then
+                        drawLine(line, Vector2.new(from.X, from.Y), Vector2.new(to.X, to.Y), 1)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Aimbot: выбор ближайшей к центру экрана цели внутри круга FOV.
+    -- Камера обновляется после стандартного CameraModule, без замены CameraType.
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.IgnoreWater = true
+    local targetName, lockedPlayer = nil, nil
+    local function aimFrame(camera, deltaTime)
+        local previousTarget = lockedPlayer
+        targetName = nil
+        lockedPlayer = nil
+        local rageMode = Settings.AutoAim
+        local aiming = (Settings.Aim and rightMouseHeld) or rageMode
+        if not aiming or Settings.Freecam or introActive or menuOpen then return end
+        if not windowFocused or UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then return end
+        local ownCharacter = localPlayer.Character
+        local ownHumanoid = ownCharacter and ownCharacter:FindFirstChildOfClass("Humanoid")
+        if not ownHumanoid or ownHumanoid.Health <= 0 then return end
+        if camera.CameraType == Enum.CameraType.Scriptable then return end
+        local radius, targetPart = Settings.FOV, Settings.TargetPart
+        local prediction, predictionMs = Settings.Prediction, Settings.PredictionMs
+        local visibleCheck, teamCheck = Settings.VisibleCheck, Settings.TeamCheck
+        if rageMode then
+            radius, targetPart = Settings.RageFOV, Settings.RageTargetPart
+            prediction, predictionMs = Settings.RagePrediction, Settings.RagePredictionMs
+            visibleCheck, teamCheck = Settings.RageVisibleCheck, Settings.RageTeamCheck
+        end
+        rayParams.FilterDescendantsInstances = rayIgnore(ownCharacter, camera, true)
+        local center, bestScore, bestPart, bestPlayer, bestPosition = camera.ViewportSize / 2, math.huge, nil, nil, nil
+        local bestPixelDistance
+        for _, player in ipairs(Players:GetPlayers()) do
+            protected("aim-candidate", function()
+                local character, humanoid = enemyData(player, teamCheck)
+                if not character then return end
+                local part = character:FindFirstChild(targetPart) or character:FindFirstChild("HumanoidRootPart")
+                if not part or not part:IsA("BasePart") then return end
+                local aimPosition = part.Position
+                if prediction then
+                    local velocity = part.AssemblyLinearVelocity
+                    -- Ограничение защищает от скачков скорости после телепортации.
+                    if velocity.Magnitude > 350 then velocity = velocity.Unit * 350 end
+                    aimPosition = aimPosition + velocity * (predictionMs / 1000)
+                end
+                local projected, visible = camera:WorldToViewportPoint(aimPosition)
+                if not visible or projected.Z <= 0.1 then return end
+                local distance = (Vector2.new(projected.X, projected.Y) - center).Magnitude
+                if distance > radius then return end
+                local score = distance
+                if rageMode then
+                    if Settings.RagePriority == "Distance" then score = (part.Position - camera.CFrame.Position).Magnitude
+                    elseif Settings.RagePriority == "Health" then score = humanoid.Health end
+                    if Settings.RageHoldTarget and player == previousTarget then score = -1 end
+                elseif player == previousTarget then
+                    score = score * 0.9
+                end
+                if score >= bestScore then return end
+                if visibleCheck then
+                    local origin = camera.CFrame.Position
+                    local hit = workspace:Raycast(origin, part.Position - origin, rayParams)
+                    if hit and not hit.Instance:IsDescendantOf(character) then return end
+                    if prediction then
+                        local predictedHit = workspace:Raycast(origin, aimPosition - origin, rayParams)
+                        if predictedHit and not predictedHit.Instance:IsDescendantOf(character) then return end
+                    end
+                end
+                bestScore, bestPart, bestPlayer, bestPosition = score, part, player, aimPosition
+                bestPixelDistance = distance
+            end)
+        end
+        if bestPart and bestPart.Parent then
+            local origin = camera.CFrame.Position
+            local offset = bestPosition - origin
+            -- Почти вертикальные направления оставляем CameraModule, избегая вырожденного lookAt.
+            if offset.Magnitude > 0.01 and math.abs(offset.Unit.Y) < 0.9999 then
+                local desired = CFrame.lookAt(origin, bestPosition)
+                if rageMode then
+                    camera.CFrame = desired
+                elseif bestPixelDistance > Settings.LegitDeadzone then
+                    local alpha = 1 - math.exp(-Settings.Smoothness * math.min(deltaTime, 0.1))
+                    camera.CFrame = camera.CFrame:Lerp(desired, alpha)
+                end
+                targetName = bestPlayer.DisplayName
+            end
+        end
+        lockedPlayer = bestPlayer
+    end
+
+    -- Triggerbot использует настоящий raycast: преграда блокирует выстрел.
+    -- Клик запускается лишь после непрерывного удержания цели на прицеле.
+    local triggerParams = RaycastParams.new()
+    triggerParams.FilterType = Enum.RaycastFilterType.Exclude
+    triggerParams.IgnoreWater = true
+    local proxyVisibilityParams = RaycastParams.new()
+    proxyVisibilityParams.FilterType = Enum.RaycastFilterType.Exclude
+    proxyVisibilityParams.IgnoreWater = true
+    local triggerTarget, triggerElapsed, shotCooldown, previousFireMode = nil, 0, 0, nil
+    extras.ResetFire = function()
+        triggerTarget, triggerElapsed, shotCooldown, previousFireMode = nil, 0, 0, nil
+        targetName, lockedPlayer = nil, nil
+    end
+    local function triggerFrame(camera, dt)
+        -- Auto Shoot имеет приоритет, но не изменяет сохранённое Settings.Trigger.
+        -- Auto Aim не участвует ни в блокировке UI, ни в выборе режима стрельбы.
+        local fireMode = Settings.AutoShot and "AutoShot" or Settings.Trigger and "Trigger" or nil
+        if fireMode ~= previousFireMode then
+            previousFireMode, triggerTarget, triggerElapsed, shotCooldown = fireMode, nil, 0, 0
+        end
+        shotCooldown = math.max(0, shotCooldown - dt)
+        if not fireMode or not clickMouse or Settings.Freecam or introActive or menuOpen or not windowFocused
+            or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+            triggerTarget, triggerElapsed = nil, 0
+            return
+        end
+        local ownCharacter = localPlayer.Character
+        local humanoid = ownCharacter and ownCharacter:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then triggerTarget, triggerElapsed = nil, 0; return end
+        triggerParams.FilterDescendantsInstances = rayIgnore(ownCharacter, camera, false)
+        local viewport = camera.ViewportSize
+        local ray = camera:ViewportPointToRay(viewport.X / 2, viewport.Y / 2)
+        local hit = workspace:Raycast(ray.Origin, ray.Direction * 10000, triggerParams)
+        local player, ancestor = nil, hit and hit.Instance
+        while ancestor and ancestor ~= workspace do
+            if ancestor:IsA("Model") then player = Players:GetPlayerFromCharacter(ancestor); if player then break end end
+            ancestor = ancestor.Parent
+        end
+        local checkTeam = Settings.TeamCheck
+        if fireMode == "AutoShot" then checkTeam = Settings.RageTeamCheck end
+        local character = player and enemyData(player, checkTeam)
+        if not character then triggerTarget, triggerElapsed = nil, 0; return end
+        if fireMode == "AutoShot" and Settings.AutoAim and player ~= lockedPlayer then
+            triggerTarget, triggerElapsed = nil, 0
+            return
+        end
+        -- Proxy может выступать из-за стены. Проверяем реальное тело отдельным
+        -- лучом, исключив все proxy, иначе область могла бы маскировать преграду.
+        if hit and isProxy(hit.Instance) then
+            local targetPart = fireMode == "AutoShot" and Settings.RageTargetPart or Settings.TargetPart
+            local body = character:FindFirstChild(targetPart) or character:FindFirstChild("HumanoidRootPart")
+            if not body then triggerTarget, triggerElapsed = nil, 0; return end
+            proxyVisibilityParams.FilterDescendantsInstances = rayIgnore(ownCharacter, camera, true)
+            local obstruction = workspace:Raycast(camera.CFrame.Position, body.Position - camera.CFrame.Position, proxyVisibilityParams)
+            if obstruction and not obstruction.Instance:IsDescendantOf(character) then
+                triggerTarget, triggerElapsed = nil, 0
+                return
+            end
+        end
+        if triggerTarget ~= player then triggerTarget, triggerElapsed = player, 0 end
+        triggerElapsed = triggerElapsed + math.min(dt, 0.1)
+        local delay = (fireMode == "AutoShot" and Settings.AutoShotDelay or Settings.TriggerDelay) / 1000
+        local ready = fireMode == "AutoShot" and Settings.RageImmediateShot or triggerElapsed >= delay
+        if ready and shotCooldown <= 0 then
+            local ok = protected("trigger-click", clickMouse)
+            triggerElapsed, shotCooldown = 0, delay
+            if not ok then
+                Settings[fireMode] = false
+                toggleRefreshers[fireMode](true)
+                refreshAutoShotLock()
+                notify((fireMode == "AutoShot" and "Auto Shoot" or "Triggerbot") .. " выключен: исполнитель не смог выполнить клик.")
+            end
+        end
+    end
+
+    -- Карточка использует уже выбранную цель; повторный поиск игроков не нужен.
+    extras.BuildTargetCard = function()
+        local card = create("CanvasGroup", { Name = "TargetCard", AnchorPoint = Vector2.new(1, 1),
+            Position = UDim2.new(1, -18, 1, -18), Size = UDim2.fromOffset(280, 104),
+            BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.08, BorderSizePixel = 0,
+            GroupTransparency = 1, Visible = false, Active = false, ZIndex = 50 }, root)
+        corner(card, 9)
+        stroke(card).Transparency = 0.25
+        local mode = text(card, "", UDim2.fromOffset(14, 10), UDim2.new(1, -28, 0, 14), 9, Theme.Accent)
+        mode.Name = "TargetCardMode"
+        local name = text(card, "", UDim2.fromOffset(14, 28), UDim2.new(1, -28, 0, 23), 16, Theme.Text, true)
+        name.Name = "TargetCardName"
+        local stats = text(card, "", UDim2.fromOffset(14, 56), UDim2.new(1, -28, 0, 18), 11, Theme.Muted)
+        stats.Name = "TargetCardStats"
+        local track = create("Frame", { Position = UDim2.fromOffset(14, 84), Size = UDim2.new(1, -28, 0, 5),
+            BackgroundColor3 = Theme.Line, BorderSizePixel = 0 }, card)
+        corner(track, 3)
+        local fill = create("Frame", { Name = "TargetCardHealth", Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = Settings.HealthColor, BorderSizePixel = 0 }, track)
+        corner(fill, 3)
+        local shownPlayer, fraction = nil, 1
+        extras.HideTargetCard = function()
+            if activeTweens[card] then activeTweens[card]:Cancel() end
+            card.Visible, card.GroupTransparency = false, 1
+            shownPlayer = nil
+        end
+        extras.TargetCardFrame = function(camera, dt)
+            if not Settings.TargetCard or introActive or menuOpen or not windowFocused or GuiService.MenuIsOpen
+                or not camera or not lockedPlayer or not (Settings.AutoAim or Settings.Aim) then
+                if card.Visible then extras.HideTargetCard() end
+                return
+            end
+            local checkTeam = Settings.TeamCheck
+            if Settings.AutoAim then checkTeam = Settings.RageTeamCheck end
+            local character, humanoid, body = enemyData(lockedPlayer, checkTeam)
+            if not character then extras.HideTargetCard(); return end
+            local maximum = math.max(1, humanoid.MaxHealth)
+            local health = math.clamp(humanoid.Health, 0, maximum)
+            local desired = health / maximum
+            if shownPlayer ~= lockedPlayer then
+                shownPlayer, fraction = lockedPlayer, desired
+                card.Visible, card.GroupTransparency = true, 1
+                tween(card, { GroupTransparency = 0 }, 0.18)
+            end
+            fraction = fraction + (desired - fraction) * (1 - math.exp(-14 * math.clamp(dt, 0, 0.1)))
+            fill.Size, fill.BackgroundColor3 = UDim2.fromScale(fraction, 1), Settings.HealthColor
+            name.Text, name.TextColor3 = lockedPlayer.DisplayName, Settings.TextColor
+            mode.Text = (Settings.AutoAim and "RAGE" or "LEGIT") .. "  /  @" .. lockedPlayer.Name
+            stats.Text = string.format("%d / %d HP  ·  %d studs", math.floor(health + 0.5), math.floor(maximum + 0.5),
+                math.floor((body.Position - camera.CFrame.Position).Magnitude + 0.5))
+            card.Size = UDim2.fromOffset(math.max(160, math.min(280, camera.ViewportSize.X - 36)), 104)
+        end
+    end
+    extras.BuildTargetCard()
+    extras.BuildTargetCard = nil
+
+    -- Два упорядоченных render-callback: сначала управление камерой,
+    -- затем ESP после стандартных Camera/Character callback. Лимита 30 FPS нет.
+    -- BindToRenderStep — управляемая по приоритету привязка к render-фазе.
+    local layoutTimer, worldTimer = 0, 0
+    local previousViewport = viewportSize()
+    local previousCamera
+    local function cameraFrame(deltaTime)
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+        local radius = Settings.AutoAim and Settings.RageFOV or Settings.FOV
+        displayedFOV = displayedFOV + (radius - displayedFOV) * (1 - math.exp(-20 * math.min(deltaTime, 0.1)))
+        if Settings.Freecam then
+            targetName, lockedPlayer = nil, nil
+            local ok = protected("freecam-frame", freecamFrame, camera, deltaTime)
+            if not ok then
+                Settings.Freecam = false
+                protected("freecam-failure-cleanup", stopFreecam)
+                toggleRefreshers.Freecam(true)
+                notify("Freecam выключен после ошибки. Состояние камеры восстановлено.")
+            end
+        else
+            protected("aim-frame", aimFrame, camera, deltaTime)
+        end
+    end
+    local function frame(deltaTime)
+        protected("watermark", extras.WatermarkFrame, deltaTime)
+        local camera = workspace.CurrentCamera
+        protected("target-card", extras.TargetCardFrame, camera, deltaTime)
+        local environmentOK = protected("environment", extras.EnvironmentFrame, camera, deltaTime)
+        if not environmentOK then
+            Settings.AtmosphereEnabled, Settings.CustomSky = false, false
+            Settings.AmbientParticles, Settings.CharacterParticles = false, false
+            protected("environment-recovery", stopEnvironment)
+            for _, key in ipairs({ "AtmosphereEnabled", "CustomSky", "AmbientParticles", "CharacterParticles" }) do
+                toggleRefreshers[key](true)
+            end
+            notify("Визуальные эффекты выключены после ошибки. Подробности — в консоли.")
+        end
+        if not camera then
+            fovCircle.Visible, crosshair.Visible = false, false
+            for _, record in pairs(records) do hideRecord(record) end
+            protected("camera-missing-proxy", restoreHitboxes)
+            protected("camera-missing-chams", restoreChams)
+            protected("camera-missing-weather", stopWeather)
+            return
+        end
+        if camera ~= previousCamera then
+            previousCamera = camera
+            for _, record in pairs(records) do hideRecord(record) end
+        end
+        local showFOV = Settings.Aim and Settings.ShowFOV
+        if Settings.AutoAim then showFOV = Settings.RageShowFOV end
+        fovCircle.Visible = showFOV and not Settings.Freecam and not introActive
+        fovCircle.Size = UDim2.fromOffset(displayedFOV * 2, displayedFOV * 2)
+        fovStroke.Color = targetName and Theme.Text or Theme.Accent
+        protected("crosshair", drawCrosshair, camera)
+        protected("proxy-frame", updateHitboxes)
+        protected("chams-frame", updateChams)
+        protected("trigger", triggerFrame, camera, deltaTime)
+        local weatherOK = protected("weather", extras.WeatherFrame, camera, deltaTime)
+        if not weatherOK then
+            Settings.Weather = false
+            protected("weather-recovery", stopWeather)
+            toggleRefreshers.Weather(true)
+            notify("Погода выключена после ошибки. Подробности — в консоли.")
+        end
+        layoutTimer, worldTimer = layoutTimer + deltaTime, worldTimer + deltaTime
+        if Settings.ESP then
+            local now = os.clock()
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= localPlayer then
+                    local record = records[player]
+                    if not record then
+                        local ok, created = protected("esp-create", makeRecord, player)
+                        if ok then record = created else protected("esp-create-cleanup", removeRecord, player) end
+                    end
+                    if record then
+                        local ok = protected("esp-player", updateRecord, player, record, camera, deltaTime, now)
+                        if not ok then protected("esp-recovery", removeRecord, player) end
+                    end
+                end
+            end
+        else
+            for _, record in pairs(records) do hideRecord(record) end
+        end
+        if worldTimer >= 0.2 then
+            worldTimer = 0
+            if Settings.WorldEnabled and Settings.WorldKeep then protected("world-refresh", applyWorld) end
+        end
+        if layoutTimer >= 0.25 then
+            layoutTimer = 0
+            local viewport = camera.ViewportSize
+            if viewport ~= previousViewport then previousViewport = viewport; fitWindow() end
+            if pendingCharacter then
+                if pendingCharacter ~= localPlayer.Character or not pendingCharacter.Parent then
+                    pendingCharacter = nil
+                elseif pendingCharacter:FindFirstChildOfClass("Humanoid") then
+                    protected("respawn-movement", applyMovement)
+                    pendingCharacter = nil
+                end
+            end
+        end
+    end
+    -- Конфиги — данные JSON, никогда не исполняемый Lua. Проверка всего профиля
+    -- завершается до изменения Settings; допустимые диапазоны берутся из ползунков.
+    extras.BuildConfigs = function()
+        local cacheKey = "__NEXUS_CONFIGS_V1"
+        if type(environment[cacheKey]) ~= "table" then environment[cacheKey] = {} end
+        local cache = environment[cacheKey]
+        local disk = type(writefile) == "function" and type(readfile) == "function"
+        local choices = {
+            TargetPart = { Head = true, HumanoidRootPart = true },
+            RageTargetPart = { Head = true, HumanoidRootPart = true },
+            RagePriority = { Crosshair = true, Distance = true, Health = true },
+            ChamsMaterial = { Neon = true, Glass = true, SmoothPlastic = true },
+            WeatherMode = { Rain = true, Snow = true, Storm = true, Blizzard = true },
+            AtmospherePreset = { Sunset = true, Night = true, Morning = true, Horror = true },
+            ParticleMode = { Fireflies = true, Sparks = true, Snow = true, Orbit = true },
+        }
+        local profile = section(configs.left, "PROFILE")
+        local storage = section(configs.right, "STORAGE")
+        local nameRow = row(profile, "Имя конфига", "Латиница, цифры, _ и - · до 32 символов", 100)
+        local nameInput = create("TextBox", { Name = "ConfigName", Position = UDim2.fromOffset(12, 59),
+            Size = UDim2.new(1, -24, 0, 29), BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
+            Text = "default", PlaceholderText = "default", ClearTextOnFocus = false,
+            Font = Enum.Font.Code, TextSize = 13, TextColor3 = Theme.Text }, nameRow)
+        corner(nameInput, 4)
+        row(storage, disk and "Файлы исполнителя" or "Память сессии",
+            disk and "Nexus_<имя>.json · рабочая папка" or "Нет readfile/writefile · до закрытия игры", 66)
+        local resultRow = row(storage, "Состояние", nil, 118)
+        local status = text(resultRow, "Готово к сохранению и загрузке.", UDim2.fromOffset(12, 37),
+            UDim2.new(1, -24, 0, 70), 11, Theme.Muted)
+        status.Name, status.TextWrapped, status.TextTruncate = "ConfigStatus", true, Enum.TextTruncate.None
+        local names, nextButton = {}, nil
+        local function validName(name)
+            return type(name) == "string" and #name >= 1 and #name <= 32 and name:match("^[%w_-]+$") ~= nil
+        end
+        local function selectedName()
+            local name = nameInput.Text:match("^%s*(.-)%s*$")
+            assert(validName(name), "Имя: 1–32 символа A–Z, 0–9, _ или -.")
+            nameInput.Text = name
+            return name
+        end
+        local function path(name) return "Nexus_" .. name .. ".json" end
+        local function refreshNames()
+            local found = {}
+            for name, content in pairs(cache) do
+                if validName(name) and type(content) == "string" then
+                    local exists = true
+                    if disk and type(isfile) == "function" then
+                        local ok, value = pcall(isfile, path(name)); exists = ok and value
+                    end
+                    if exists then found[name] = true end
+                end
+            end
+            if disk and type(listfiles) == "function" then
+                local ok, files = pcall(listfiles, ".")
+                if ok and type(files) == "table" then
+                    for _, file in ipairs(files) do
+                        if type(file) == "string" then
+                            local base = file:gsub("\\", "/"):match("([^/]+)$")
+                            local name = base and base:match("^Nexus_(.-)%.json$")
+                            if validName(name) then found[name] = true end
+                        end
+                    end
+                end
+            end
+            table.clear(names)
+            for name in pairs(found) do table.insert(names, name) end
+            table.sort(names)
+            if nextButton then nextButton.Text = tostring(#names) .. " profiles" end
+        end
+        local function snapshot()
+            local values = {}
+            for key, value in pairs(Settings) do values[key] = typeof(value) == "Color3" and toHex(value) or value end
+            return { app = "NEXUS", version = 1, settings = values }
+        end
+        local function decode(content)
+            assert(type(content) == "string" and #content <= 262144, "Файл пуст, повреждён или превышает 256 KB.")
+            local data = HttpService:JSONDecode(content)
+            assert(type(data) == "table" and data.app == "NEXUS" and data.version == 1 and type(data.settings) == "table",
+                "Неизвестный формат конфига NEXUS.")
+            local values = {}
+            for key, default in pairs(extras.Defaults) do
+                local value = data.settings[key]
+                if value == nil then value = default
+                elseif typeof(default) == "Color3" then
+                    assert(type(value) == "string", "Неверный цвет: " .. key)
+                    value = parseHex(value)
+                    assert(value, "Неверный HEX: " .. key)
+                elseif type(default) == "boolean" then
+                    assert(type(value) == "boolean", "Ожидался переключатель: " .. key)
+                elseif type(default) == "number" then
+                    local range = extras.Ranges[key]
+                    assert(type(value) == "number" and value == value and math.abs(value) < math.huge and range,
+                        "Неверное число: " .. key)
+                    assert(value >= range[1] and value <= range[2], "Значение вне диапазона: " .. key)
+                    value = math.clamp(range[1] + math.floor((value - range[1]) / range[3] + 0.5) * range[3], range[1], range[2])
+                elseif type(default) == "string" then
+                    if key:match("^Sky[BDFLRU][knftp]*$") then
+                        assert(type(value) == "string" and (value == "" or (#value <= 20 and value:match("^%d+$"))), "Неверный ID неба: " .. key)
+                    else
+                        assert(type(value) == "string" and choices[key] and choices[key][value], "Неверный режим: " .. key)
+                    end
+                end
+                values[key] = value
+            end
+            -- При конфликте режимов в стороннем JSON приоритет получает Fly.
+            if values.Fly then values.Freecam = false end
+            if values.AtmosphereEnabled then values.WorldEnabled = false end
+            if not clickMouse then values.AutoShot, values.Trigger = false, false end
+            return values
+        end
+        local function apply(values)
+            stopEnvironment(); stopMotion(); stopFreecam(); stopWeather()
+            restoreMovement(); restoreWorld(); restoreHitboxes(); restoreChams()
+            for key in pairs(extras.Defaults) do Settings[key] = values[key] end
+            extras.ResetFire()
+            for _, refresh in pairs(toggleRefreshers) do refresh(false) end
+            for _, refresh in pairs(extras.Refresh) do refresh() end
+            targetButton.Text = Settings.TargetPart == "Head" and "Head" or "RootPart"
+            materialButton.Text = Settings.ChamsMaterial
+            weatherModeButton.Text = ({ Rain = "Дождь", Snow = "Снег", Storm = "Гроза", Blizzard = "Метель" })[Settings.WeatherMode]
+            refreshAutoShotLock()
+            fitWindow()
+            applyMovement()
+            if Settings.WorldEnabled then applyWorld() end
+            if Settings.Freecam then
+                local ok = protected("config-freecam", setFreecam, true)
+                if not ok then Settings.Freecam = false; stopFreecam(); toggleRefreshers.Freecam(false) end
+            end
+        end
+        local function operate(label, callback)
+            local ok, message = pcall(callback)
+            status.Text = ok and (message or label .. ": готово.") or (label .. ": " .. tostring(message))
+            notify(status.Text)
+        end
+        local function applyWithRollback(values)
+            local previousValues = {}
+            for key, value in pairs(Settings) do previousValues[key] = value end
+            local ok, problem = pcall(apply, values)
+            if not ok then
+                local restored, restoreProblem = pcall(apply, previousValues)
+                if not restored then
+                    stopMotion()
+                    Settings.Fly, Settings.Noclip = false, false
+                    toggleRefreshers.Fly(false); toggleRefreshers.Noclip(false)
+                    error("Ошибка применения: " .. tostring(problem) .. "; ошибка восстановления: " .. tostring(restoreProblem))
+                end
+                error("Настройки не применены; прежние восстановлены: " .. tostring(problem))
+            end
+        end
+        action(profile, "Сохранить конфиг", "Текущие настройки, цвета и режимы", "Save", function()
+            operate("Сохранение", function()
+                local name = selectedName()
+                local content = HttpService:JSONEncode(snapshot())
+                assert(#content <= 262144, "Конфиг слишком большой.")
+                if disk then
+                    writefile(path(name), content)
+                    assert(readfile(path(name)) == content, "Запись файла не подтверждена.")
+                end
+                cache[name] = content
+                refreshNames()
+                return "Сохранён: " .. name .. (disk and " · JSON-файл." or " · только эта сессия.")
+            end)
+        end)
+        action(profile, "Загрузить конфиг", "Применить сохранённые настройки", "Load", function()
+            operate("Загрузка", function()
+                local name = selectedName()
+                local content
+                if disk then content = readfile(path(name)) else content = cache[name] end
+                assert(content, "Конфиг не найден: " .. name)
+                local values = decode(content)
+                applyWithRollback(values)
+                cache[name] = content
+                refreshNames()
+                return "Загружен: " .. name .. "."
+            end)
+        end)
+        nextButton = action(profile, "Выбрать сохранённый", "По очереди · можно ввести имя вручную", "0 profiles", function()
+            operate("Выбор", function()
+                refreshNames()
+                assert(#names > 0, "Сохранённых профилей пока нет.")
+                local index = 0
+                for i, name in ipairs(names) do if name == nameInput.Text then index = i; break end end
+                nameInput.Text = names[index % #names + 1]
+                return "Выбран: " .. nameInput.Text .. ". Нажми Load."
+            end)
+        end)
+        action(storage, "Обновить список", "Найти сохранённые профили", "Refresh", function()
+            operate("Список", function() refreshNames(); return "Найдено профилей: " .. tostring(#names) .. "." end)
+        end)
+        action(storage, "Удалить конфиг", "Удалить профиль с указанным именем", "Delete", function()
+            local ok, name = pcall(selectedName)
+            if not ok then notify(tostring(name)); return end
+            confirm("delete-config-" .. name, "Удалить «" .. name .. "»?", function()
+                operate("Удаление", function()
+                    if disk then
+                        assert(type(delfile) == "function", "Исполнитель не поддерживает delfile.")
+                        delfile(path(name))
+                        if type(isfile) == "function" then assert(not isfile(path(name)), "Файл не удалён.") end
+                    else assert(cache[name], "Конфиг не найден.") end
+                    cache[name] = nil
+                    refreshNames()
+                    return "Удалён: " .. name .. "."
+                end)
+            end)
+        end, true)
+        action(storage, "Сбросить настройки", "Вернуть значения по умолчанию", "Reset", function()
+            operate("Сброс", function() applyWithRollback(extras.Defaults); return "Настройки сброшены. Файлы конфигов сохранены." end)
+        end)
+        refreshNames()
+    end
+    extras.BuildConfigs()
+    extras.BuildConfigs = nil
+
+    -- Быстрое отключение не удаляет меню, значения ползунков или файлы профилей.
+    extras.DisableAll = function()
+        for _, key in ipairs({ "Aim", "AutoAim", "AutoShot", "Trigger", "ESP", "Chams", "Hitbox",
+            "Freecam", "Noclip", "Fly", "SpeedEnabled", "JumpEnabled", "Bhop", "WorldEnabled", "Weather",
+            "Crosshair", "Watermark", "TargetCard", "AtmosphereEnabled", "CustomSky", "AmbientParticles", "CharacterParticles" }) do
+            Settings[key] = false
+            if toggleRefreshers[key] then toggleRefreshers[key](false) end
+        end
+        rightMouseHeld, activeSlider, dragWindow = false, nil, nil
+        extras.ResetFire()
+        extras.CloseTelegram()
+        refreshAutoShotLock()
+        local restored = true
+        for _, restore in ipairs({ stopEnvironment, stopMotion, stopFreecam, restoreMovement, restoreWorld, restoreHitboxes,
+            restoreChams, stopWeather, extras.HideTargetCard, extras.HideWatermark }) do
+            if not protected("disable-all-restore", restore) then restored = false end
+        end
+        fovCircle.Visible, crosshair.Visible = false, false
+        for _, record in pairs(records) do
+            if not protected("disable-all-overlay", hideRecord, record) then restored = false end
+        end
+        notify(restored and "Активные функции отключены. Мир и персонаж восстановлены."
+            or "Функции отключены. При восстановлении возникла ошибка — проверь консоль.")
+    end
+
+    RunService:BindToRenderStep(renderName, Enum.RenderPriority.Camera.Value + 1, function(deltaTime)
+        if alive then protected("camera", cameraFrame, deltaTime) end
+    end)
+    renderBound = true
+    RunService:BindToRenderStep(renderName .. "_ESP", Enum.RenderPriority.Last.Value + 1, function(deltaTime)
+        if alive then protected("render", frame, deltaTime) end
+    end)
+    environment[sessionKey] = controller
+    extras.StartIntro()
+end)
+
+if not bootOK then
+    if emergencyCleanup then pcall(emergencyCleanup) end
+    warn("[Nexus] Не удалось запустить панель: " .. tostring(bootError))
+end
